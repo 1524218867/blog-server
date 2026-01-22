@@ -25,7 +25,7 @@ jobs:
           source:
             - "index.js"
             - "package.json"
-            - "**/*.js"      # 如果还有其他 js 文件
+            - "**/*.js"
           target: "C:/wwwroot/blog-server"
           timeout: 30s
           command_timeout: 10m
