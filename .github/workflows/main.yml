@@ -25,11 +25,7 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      # 4️⃣ 可选：运行构建任务（如果有 TypeScript 或打包）
-      - name: Build project
-        run: npm run build
-
-      # 5️⃣ 上传后端文件到 Windows 服务器
+      # 4️⃣ 上传后端文件到 Windows 服务器
       - name: Upload Node backend to server
         uses: appleboy/scp-action@v0.1.4
         with:
@@ -37,10 +33,10 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: ${{ secrets.SERVER_PORT }}
-          source: "**/*"            # 上传整个项目（可指定 src/dist 等目录）
+          source: "**/*"            # 上传整个项目
           target: "C:/wwwroot/blog-server"
 
-      # 6️⃣ 重启 Node 服务
+      # 5️⃣ 重启 Node 服务
       - name: Restart Node service
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -49,7 +45,7 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: ${{ secrets.SERVER_PORT }}
           script: |
-            # 停掉旧进程（假设用 pm2 或 node）
+            # 停掉旧 Node 进程
             taskkill /F /IM node.exe || echo "No previous node process"
             
             # 启动 Node 服务
