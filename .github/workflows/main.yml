@@ -14,29 +14,33 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2️⃣ 安装 Node.js（在 Actions 上执行 npm install）
+      # 2️⃣ 安装 Node.js（可选，主要是为了检查依赖）
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
 
+      # 3️⃣ 安装依赖（可选）
       - name: Install dependencies
         run: npm install
 
-      # 3️⃣ 上传项目到 Windows 服务器
+      # 4️⃣ 上传 Node 后端关键文件到 Windows 服务器
       - name: Upload Node backend to server
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/scp-action@v0.1.4
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: ${{ secrets.SERVER_PORT }}
-          script: |
-            cmd /c "if not exist C:\wwwroot\blog-server mkdir C:\wwwroot\blog-server"
-            cmd /c "robocopy . C:\wwwroot\blog-server /MIR /R:3 /W:5 /XD node_modules .git .github .gitignore"
+          source: |
+            index.js
+            package.json
+            node_modules/**
+            dist/**          # 如果有打包输出目录
+          target: "C:/wwwroot/blog-server"
 
-      # 4️⃣ 重启 Node 服务
+      # 5️⃣ 重启 Node 服务
       - name: Restart Node service
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -45,5 +49,9 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: ${{ secrets.SERVER_PORT }}
           script: |
-            cmd /c "taskkill /F /IM node.exe || echo No previous node process"
-            cmd /c "cd C:\wwwroot\blog-server && start cmd /c \"node index.js\""
+            echo "Stopping old Node processes..."
+            taskkill /F /IM node.exe || echo "No previous node process"
+
+            echo "Starting Node service..."
+            cd C:\wwwroot\blog-server
+            start cmd /c "node index.js"
