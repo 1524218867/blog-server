@@ -20,10 +20,7 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: ${{ secrets.SERVER_PORT }}
-          source:
-            - "index.js"
-            - "package.json"
-            - "**/*.js"
+          source: "index.js,package.json,*.js"
           target: "C:/wwwroot/blog-server"
           timeout: 30s
           command_timeout: 10m
