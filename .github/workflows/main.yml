@@ -14,7 +14,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2️⃣ 上传 Node 后端到 Windows 服务器
+      # 2️⃣ 上传 Node 后端源代码到 Windows 服务器（不上传 node_modules）
       - name: Upload Node backend to server
         uses: appleboy/scp-action@v0.1.4
         with:
@@ -22,13 +22,15 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: ${{ secrets.SERVER_PORT }}
-          source: |
-            index.js
-            package.json
-            "**/*.js"
-          target: C:/wwwroot/blog-server
+          source:
+            - index.js
+            - package.json
+            - "**/*.js"      # 如果项目里还有其他 js 文件
+          target: "C:/wwwroot/blog-server"
           timeout: 30s
           command_timeout: 10m
+          overwrite: true   # 如果希望覆盖服务器上的旧文件
+          debug: true       # 打印调试信息，方便排查问题
 
       # 3️⃣ 安装依赖并重启 Node 服务
       - name: Install dependencies and restart Node service
@@ -39,11 +41,10 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: ${{ secrets.SERVER_PORT }}
           script: |
-            if not exist C:\wwwroot\blog-server mkdir C:\wwwroot\blog-server
             cd C:\wwwroot\blog-server
-            echo Installing dependencies...
+            echo "Installing dependencies..."
             npm install
-            echo Stopping old Node process...
-            taskkill /F /IM node.exe || echo No previous node process
-            echo Starting Node service...
+            echo "Stopping old Node process..."
+            taskkill /F /IM node.exe || echo "No previous node process"
+            echo "Starting Node service..."
             start cmd /c "node index.js"
