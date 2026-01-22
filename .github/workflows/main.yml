@@ -24,7 +24,9 @@ jobs:
           target: "C:/wwwroot/blog-server"
           timeout: 30s
           command_timeout: 10m
-          overwrite: true
+          # Windows tar (bsdtar) does not support --overwrite, but overwrites by default.
+          # Setting overwrite to true causes an error because it adds the unsupported flag.
+          overwrite: false
           debug: true
 
       - name: Install dependencies and restart Node service
