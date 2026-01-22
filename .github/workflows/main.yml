@@ -23,9 +23,9 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: ${{ secrets.SERVER_PORT }}
           source:
-            - index.js
-            - package.json
-            - **/*.js       # 如果还有其他 js 文件
+            - "index.js"
+            - "package.json"
+            - "**/*.js"
           target: "C:/wwwroot/blog-server"
           timeout: 30s
           command_timeout: 10m
@@ -39,6 +39,7 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: ${{ secrets.SERVER_PORT }}
           script: |
+            if not exist C:\wwwroot\blog-server mkdir C:\wwwroot\blog-server
             cd C:\wwwroot\blog-server
             echo "Installing dependencies..."
             npm install
