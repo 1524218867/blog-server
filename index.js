@@ -982,7 +982,7 @@ app.post('/api/upload/audios', requireAuth, upload.array('files'), async (req, r
       file.originalname = Buffer.from(file.originalname, 'latin1').toString('utf8')
       
       const ext = path.extname(file.originalname).toLowerCase()
-      const basename = path.parse(file.originalname).name
+      const basename = path.parse(file.originalname).name.toLowerCase() // 统一转小写以便匹配
       
       if (ext === '.lrc') {
         // 读取LRC内容
@@ -1008,13 +1008,14 @@ app.post('/api/upload/audios', requireAuth, upload.array('files'), async (req, r
       const url = `${protocol}://${host}/uploads/${file.filename}`
       // 使用原始文件名（去掉后缀）作为显示名
       const displayFilename = path.parse(file.originalname).name
+      const key = displayFilename.toLowerCase()
       
       // 查找匹配的歌词
-      let lyrics = lrcFilesMap.get(displayFilename) || null
+      let lyrics = lrcFilesMap.get(key) || null
       
       // 查找匹配的封面
       let cover = null
-      let coverFilename = coverFilesMap.get(displayFilename)
+      let coverFilename = coverFilesMap.get(key)
 
       // 智能匹配逻辑：如果是单曲上传，允许不匹配文件名
       if (audioFiles.length === 1) {
