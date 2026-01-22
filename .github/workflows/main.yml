@@ -25,19 +25,20 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      # 4️⃣ 上传整个 Node 项目到 Windows 服务器
+      # 4️⃣ 上传后端文件到 Windows 服务器（robocopy）
       - name: Upload Node backend to server
-        uses: appleboy/scp-action@v0.1.4
+        uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: ${{ secrets.SERVER_PORT }}
-          source: "./*"                     # ✅ 确保上传整个项目根目录，包括 package.json
-          target: "C:/wwwroot/blog-server"  # Windows 目标目录
-          debug: true                       # 打开 debug 看上传详情
-          strip_components: 0
-          overwrite: true                   # 覆盖旧文件
+          script: |
+            # 创建目标目录（如果不存在）
+            if not exist C:\wwwroot\blog-server mkdir C:\wwwroot\blog-server
+            
+            # 使用 robocopy 镜像上传目录（排除不需要的）
+            robocopy . C:\wwwroot\blog-server /MIR /R:3 /W:5 /XD node_modules .git .github .gitignore
 
       # 5️⃣ 重启 Node 服务（Windows CMD）
       - name: Restart Node service
@@ -48,9 +49,9 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: ${{ secrets.SERVER_PORT }}
           script: |
-            echo "Stopping old Node processes..."
+            # 停掉旧 Node 进程
             taskkill /F /IM node.exe || echo "No previous node process"
             
-            echo "Starting Node service..."
+            # 启动 Node 服务
             cd C:\wwwroot\blog-server
             start cmd /c "node index.js"
