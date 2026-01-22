@@ -337,7 +337,7 @@ app.get('/api/admin/ping', requireAuth, requireRole('admin'), (_req, res) => {
 })
 
 // --- 文件上传 ---
-app.post('/api/upload', requireAuth, upload.single('file'), (req, res) => {
+const singleUploadHandler = (req, res) => {
   if (!req.file) {
     res.status(400).json({ ok: false, reason: 'no_file' })
     return
@@ -351,7 +351,11 @@ app.post('/api/upload', requireAuth, upload.single('file'), (req, res) => {
   const host = req.get('host')
   const url = `${protocol}://${host}/uploads/${req.file.filename}`
   res.json({ ok: true, url })
-})
+}
+
+app.post('/api/upload', requireAuth, upload.single('file'), singleUploadHandler)
+// 添加别名以兼容前端可能调用的 /api/upload/image
+app.post('/api/upload/image', requireAuth, upload.single('file'), singleUploadHandler)
 
 // --- 文章管理 ---
 
@@ -819,9 +823,19 @@ app.get('/api/audio-groups', requireAuth, async (req, res) => {
 })
 
 // 创建音乐分组
-app.post('/api/audio-groups', requireAuth, async (req, res) => {
+app.post('/api/audio-groups', requireAuth, upload.single('cover'), async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
-  const { name, cover } = req.body
+  const { name } = req.body
+  let { cover } = req.body
+  
+  if (req.file) {
+    // 修复中文文件名乱码
+    req.file.originalname = Buffer.from(req.file.originalname, 'latin1').toString('utf8')
+    const protocol = req.protocol
+    const host = req.get('host')
+    cover = `${protocol}://${host}/uploads/${req.file.filename}`
+  }
+
   if (!name) return res.status(400).json({ ok: false, reason: 'missing_name' })
   try {
     const [result] = await pool.query('INSERT INTO audio_groups (name, cover) VALUES (?, ?)', [name, cover])
@@ -833,10 +847,20 @@ app.post('/api/audio-groups', requireAuth, async (req, res) => {
 })
 
 // 更新音乐分组
-app.put('/api/audio-groups/:id', requireAuth, async (req, res) => {
+app.put('/api/audio-groups/:id', requireAuth, upload.single('cover'), async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
   const { id } = req.params
-  const { name, cover } = req.body
+  const { name } = req.body
+  let { cover } = req.body
+
+  if (req.file) {
+    // 修复中文文件名乱码
+    req.file.originalname = Buffer.from(req.file.originalname, 'latin1').toString('utf8')
+    const protocol = req.protocol
+    const host = req.get('host')
+    cover = `${protocol}://${host}/uploads/${req.file.filename}`
+  }
+
   try {
     await pool.query('UPDATE audio_groups SET name = ?, cover = ? WHERE id = ?', [name, cover, id])
     res.json({ ok: true })
@@ -986,11 +1010,22 @@ app.post('/api/upload/audios', requireAuth, upload.array('files'), async (req, r
       const displayFilename = path.parse(file.originalname).name
       
       // 查找匹配的歌词
-      const lyrics = lrcFilesMap.get(displayFilename) || null
+      let lyrics = lrcFilesMap.get(displayFilename) || null
       
       // 查找匹配的封面
       let cover = null
-      const coverFilename = coverFilesMap.get(displayFilename)
+      let coverFilename = coverFilesMap.get(displayFilename)
+
+      // 智能匹配逻辑：如果是单曲上传，允许不匹配文件名
+      if (audioFiles.length === 1) {
+        if (!lyrics && lrcFilesMap.size === 1) {
+           lyrics = lrcFilesMap.values().next().value
+        }
+        if (!coverFilename && coverFilesMap.size === 1) {
+           coverFilename = coverFilesMap.values().next().value
+        }
+      }
+
       if (coverFilename) {
         cover = `${protocol}://${host}/uploads/${coverFilename}`
       }
