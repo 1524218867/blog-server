@@ -36,7 +36,7 @@ jobs:
           source: "**/*"            # 上传整个项目
           target: "C:/wwwroot/blog-server"
 
-      # 5️⃣ 重启 Node 服务
+      # 5️⃣ 重启 Node 服务（Windows CMD 兼容）
       - name: Restart Node service
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -45,9 +45,6 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: ${{ secrets.SERVER_PORT }}
           script: |
-            # 停掉旧 Node 进程
             taskkill /F /IM node.exe || echo "No previous node process"
-            
-            # 启动 Node 服务
             cd C:\wwwroot\blog-server
             start cmd /c "node index.js"
