@@ -23,14 +23,14 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: ${{ secrets.SERVER_PORT }}
           source:
-            - index.js
-            - package.json
-            - "**/*.js"      # 如果项目里还有其他 js 文件
+            - "index.js"
+            - "package.json"
+            - "**/*.js"      # 如果还有其他 js 文件
           target: "C:/wwwroot/blog-server"
           timeout: 30s
           command_timeout: 10m
-          overwrite: true   # 如果希望覆盖服务器上的旧文件
-          debug: true       # 打印调试信息，方便排查问题
+          overwrite: true
+          debug: true
 
       # 3️⃣ 安装依赖并重启 Node 服务
       - name: Install dependencies and restart Node service
