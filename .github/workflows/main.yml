@@ -40,7 +40,5 @@ jobs:
             cd C:\wwwroot\blog-server
             echo "Installing dependencies..."
             npm install
-            echo "Stopping old Node process..."
-            taskkill /F /IM node.exe || echo "No previous node process"
-            echo "Starting Node service..."
-            start cmd /c "node index.js"
+            echo "Restarting Node service..."
+            pm2 restart blog-server
