@@ -1,5 +1,6 @@
 name: Deploy Node Backend (Windows Server)
 
+# 触发条件：main 分支 push 时自动触发
 on:
   push:
     branches:
@@ -10,9 +11,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1️⃣ 拉取代码
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # 2️⃣ 上传 Node 后端文件到 Windows 服务器
       - name: Upload Node backend to server
         uses: appleboy/scp-action@v0.1.4
         with:
@@ -24,11 +27,10 @@ jobs:
           target: "C:/wwwroot/blog-server"
           timeout: 30s
           command_timeout: 10m
-          # Windows tar (bsdtar) does not support --overwrite, but overwrites by default.
-          # Setting overwrite to true causes an error because it adds the unsupported flag.
           overwrite: false
           debug: true
 
+      # 3️⃣ SSH 登录服务器，安装依赖并重启 Node（PM2）
       - name: Install dependencies and restart Node service
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -38,7 +40,18 @@ jobs:
           port: ${{ secrets.SERVER_PORT }}
           script: |
             cd C:\wwwroot\blog-server
+
             echo "Installing dependencies..."
-            npm install
-            echo "Restarting Node service..."
-            pm2 restart blog-server
+            npm install --production
+
+            echo "Stopping Node service if running..."
+            pm2 stop blog-server || true
+
+            echo "Starting Node service..."
+            pm2 start index.js --name blog-server --update-env
+
+            echo "Saving PM2 process list..."
+            pm2 save
+
+            echo "Checking PM2 status..."
+            pm2 list
