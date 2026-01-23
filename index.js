@@ -117,6 +117,13 @@ const ensureSchema = async () => {
     )
   `)
 
+  // 尝试添加 avatar 列（如果表已存在但没有该列）
+  try {
+    await pool.query('ALTER TABLE users ADD COLUMN avatar VARCHAR(255)')
+  } catch (_e) {
+    // 忽略重复列错误
+  }
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS articles (
       id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
