@@ -1253,6 +1253,19 @@ app.get('/api/search', requireAuth, async (req, res) => {
   }
 })
 
+// --- 代理接口 (解决 CORS 问题) ---
+app.get('/api/proxy/wallpaper', async (req, res) => {
+  try {
+    const response = await fetch('https://api.52vmy.cn/api/img/tu/view');
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    console.error('Proxy error:', error);
+    res.status(500).json({ code: 500, msg: 'Proxy error' });
+  }
+});
+
+
 const port = Number(process.env.PORT) || 3000
 // 启动时尝试初始化数据库结构
 ensureSchema().catch(err => {
