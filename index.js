@@ -1268,7 +1268,7 @@ app.get('/api/proxy/wallpaper', async (req, res) => {
 
 app.get('/api/proxy/bing', async (req, res) => {
   try {
-    const response = await fetch('https://raw.onmicrosoft.cn/Bing-Wallpaper-Action/main/data/zh-CN_all.json');
+    const response = await fetch('https://api.52vmy.cn/api/wl/word/bing/tu');
     const data = await response.json();
     res.json(data);
   } catch (error) {
