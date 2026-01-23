@@ -120,8 +120,11 @@ const ensureSchema = async () => {
   // 尝试添加 avatar 列（如果表已存在但没有该列）
   try {
     await pool.query('ALTER TABLE users ADD COLUMN avatar VARCHAR(255)')
-  } catch (_e) {
-    // 忽略重复列错误
+  } catch (e) {
+    // 忽略重复列错误 (1060: Duplicate column name)
+    if (e.errno !== 1060) {
+      console.warn('Warning: Failed to add avatar column:', e.message)
+    }
   }
 
   await pool.query(`
