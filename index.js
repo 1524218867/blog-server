@@ -1266,6 +1266,18 @@ app.get('/api/proxy/wallpaper', async (req, res) => {
 });
 
 
+app.get('/api/proxy/bing', async (req, res) => {
+  try {
+    const response = await fetch('https://raw.onmicrosoft.cn/Bing-Wallpaper-Action/main/data/zh-CN_all.json');
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    console.error('Proxy error:', error);
+    res.status(500).json({ code: 500, msg: 'Proxy error' });
+  }
+});
+
+
 const port = Number(process.env.PORT) || 3000
 // 启动时尝试初始化数据库结构
 ensureSchema().catch(err => {
