@@ -1001,6 +1001,27 @@ app.delete('/api/audios/:id', requireAuth, async (req, res) => {
   }
 })
 
+// 导入外部链接音乐
+app.post('/api/audios/link', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ ok: false })
+  const { url, filename, singer, cover, lyrics, group_id } = req.body
+  
+  if (!url || !filename) {
+    return res.status(400).json({ ok: false, reason: 'missing_fields' })
+  }
+
+  try {
+    const [result] = await pool.query(
+      'INSERT INTO audios (url, filename, singer, cover, lyrics, group_id) VALUES (?, ?, ?, ?, ?, ?)',
+      [url, filename, singer, cover, lyrics, group_id || null]
+    )
+    res.json({ ok: true, id: result.insertId })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ ok: false, reason: 'db_error' })
+  }
+})
+
 // 音乐上传接口
 app.post('/api/upload/audios', requireAuth, upload.array('files'), async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
