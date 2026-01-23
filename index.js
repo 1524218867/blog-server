@@ -329,7 +329,40 @@ app.post('/api/auth/login', async (req, res) => {
 })
 
 app.get('/api/auth/me', requireAuth, async (req, res) => {
-  res.json({ ok: true, user: req.user })
+  if (!pool) {
+    // Fallback if DB not ready, though requireAuth checks secret
+    res.json({ ok: true, user: req.user })
+    return
+  }
+  try {
+    const [rows] = await pool.query('SELECT id, email, role, avatar FROM users WHERE id = ?', [req.user.id])
+    if (rows.length > 0) {
+      res.json({ ok: true, user: rows[0] })
+    } else {
+      res.status(404).json({ ok: false, reason: 'user_not_found' })
+    }
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ ok: false, reason: 'db_error' })
+  }
+})
+
+app.put('/api/auth/profile', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ ok: false })
+  const { avatar } = req.body
+  
+  try {
+    if (avatar !== undefined) {
+      await pool.query('UPDATE users SET avatar = ? WHERE id = ?', [avatar, req.user.id])
+    }
+    
+    // 返回更新后的用户信息
+    const [rows] = await pool.query('SELECT id, email, role, avatar FROM users WHERE id = ?', [req.user.id])
+    res.json({ ok: true, user: rows[0] })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ ok: false, reason: 'db_error' })
+  }
 })
 
 app.get('/api/admin/ping', requireAuth, requireRole('admin'), (_req, res) => {
