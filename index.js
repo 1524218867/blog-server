@@ -258,6 +258,17 @@ const ensureSchema = async () => {
   } catch (_e) {}
   // -----------------------
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS bookmarks (
+      id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+      user_id INT UNSIGNED NOT NULL,
+      title VARCHAR(255) NOT NULL,
+      url VARCHAR(1024) NOT NULL,
+      icon VARCHAR(255),
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `)
+
   const adminEmail = process.env.ADMIN_EMAIL
   const adminPassword = process.env.ADMIN_PASSWORD
   if (!adminEmail || !adminPassword) {
@@ -1290,6 +1301,75 @@ app.get('/api/search', requireAuth, async (req, res) => {
   } catch (error) {
     console.error(error)
     res.status(500).json({ ok: false, reason: 'db_error' })
+  }
+})
+
+// --- 书签管理 ---
+app.get('/api/bookmarks', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ ok: false })
+  try {
+    const [rows] = await pool.query(
+      'SELECT * FROM bookmarks WHERE user_id = ? ORDER BY created_at DESC',
+      [req.user.id]
+    )
+    res.json(rows)
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ ok: false })
+  }
+})
+
+app.post('/api/bookmarks', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ ok: false })
+  const { title, url, icon } = req.body
+  try {
+    const [result] = await pool.query(
+      'INSERT INTO bookmarks (user_id, title, url, icon) VALUES (?, ?, ?, ?)',
+      [req.user.id, title, url, icon || null]
+    )
+    res.json({ ok: true, id: result.insertId })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ ok: false })
+  }
+})
+
+app.delete('/api/bookmarks/:id', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ ok: false })
+  try {
+    await pool.query(
+      'DELETE FROM bookmarks WHERE id = ? AND user_id = ?',
+      [req.params.id, req.user.id]
+    )
+    res.json({ ok: true })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ ok: false })
+  }
+})
+
+app.post('/api/bookmarks/batch', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ ok: false })
+  const { bookmarks } = req.body // Expects array of { title, url, icon? }
+  if (!Array.isArray(bookmarks)) return res.status(400).json({ ok: false })
+  
+  const conn = await pool.getConnection()
+  try {
+    await conn.beginTransaction()
+    for (const bm of bookmarks) {
+      await conn.query(
+        'INSERT INTO bookmarks (user_id, title, url, icon) VALUES (?, ?, ?, ?)',
+        [req.user.id, bm.title, bm.url, bm.icon || null]
+      )
+    }
+    await conn.commit()
+    res.json({ ok: true })
+  } catch (error) {
+    await conn.rollback()
+    console.error(error)
+    res.status(500).json({ ok: false })
+  } finally {
+    conn.release()
   }
 })
 
