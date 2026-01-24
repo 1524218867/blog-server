@@ -265,7 +265,7 @@ const ensureSchema = async () => {
       user_id INT UNSIGNED NOT NULL,
       title VARCHAR(255) NOT NULL,
       url VARCHAR(1024) NOT NULL,
-      icon VARCHAR(255),
+      icon LONGTEXT,
       category VARCHAR(255) DEFAULT '未分类',
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
