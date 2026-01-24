@@ -146,9 +146,17 @@ const ensureSchema = async () => {
     CREATE TABLE IF NOT EXISTS image_groups (
       id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
       name VARCHAR(50) NOT NULL,
+      user_id INT UNSIGNED,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   `)
+
+  // 尝试添加 user_id 列
+  try {
+    await pool.query('ALTER TABLE image_groups ADD COLUMN user_id INT UNSIGNED')
+  } catch (_e) {
+    // 忽略重复列错误
+  }
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS images (
@@ -156,18 +164,34 @@ const ensureSchema = async () => {
       url VARCHAR(255) NOT NULL,
       filename VARCHAR(255) NOT NULL,
       group_id INT UNSIGNED,
+      user_id INT UNSIGNED,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (group_id) REFERENCES image_groups(id) ON DELETE SET NULL
     )
   `)
 
+  // 尝试添加 user_id 列
+  try {
+    await pool.query('ALTER TABLE images ADD COLUMN user_id INT UNSIGNED')
+  } catch (_e) {
+    // 忽略重复列错误
+  }
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS video_groups (
       id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
       name VARCHAR(50) NOT NULL,
+      user_id INT UNSIGNED,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   `)
+
+  // 尝试添加 user_id 列
+  try {
+    await pool.query('ALTER TABLE video_groups ADD COLUMN user_id INT UNSIGNED')
+  } catch (_e) {
+    // 忽略重复列错误
+  }
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS videos (
@@ -175,6 +199,7 @@ const ensureSchema = async () => {
       url VARCHAR(255) NOT NULL,
       filename VARCHAR(255) NOT NULL,
       group_id INT UNSIGNED,
+      user_id INT UNSIGNED,
       duration VARCHAR(20),
       cover VARCHAR(255),
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -182,22 +207,31 @@ const ensureSchema = async () => {
     )
   `)
 
+  // 尝试添加 user_id 列
+  try {
+    await pool.query('ALTER TABLE videos ADD COLUMN user_id INT UNSIGNED')
+  } catch (_e) {
+    // 忽略重复列错误
+  }
+
   // --- 新增：音乐相关表 ---
   await pool.query(`
     CREATE TABLE IF NOT EXISTS audio_groups (
       id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
       name VARCHAR(50) NOT NULL,
       cover VARCHAR(255),
+      user_id INT UNSIGNED,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   `)
   
-  // 尝试添加 cover 列（如果表已存在但没有该列）
+  // 尝试添加 cover 和 user_id 列
   try {
     await pool.query('ALTER TABLE audio_groups ADD COLUMN cover VARCHAR(255)')
-  } catch (_e) {
-    // 忽略重复列错误
-  }
+  } catch (_e) {}
+  try {
+    await pool.query('ALTER TABLE audio_groups ADD COLUMN user_id INT UNSIGNED')
+  } catch (_e) {}
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS audios (
@@ -205,6 +239,7 @@ const ensureSchema = async () => {
       url VARCHAR(255) NOT NULL,
       filename VARCHAR(255) NOT NULL,
       group_id INT UNSIGNED,
+      user_id INT UNSIGNED,
       duration VARCHAR(20),
       cover VARCHAR(255),
       singer VARCHAR(100),
@@ -214,12 +249,13 @@ const ensureSchema = async () => {
     )
   `)
 
-  // 尝试添加 lyrics 列（如果表已存在但没有该列）
+  // 尝试添加 lyrics 和 user_id 列
   try {
     await pool.query('ALTER TABLE audios ADD COLUMN lyrics TEXT')
-  } catch (_e) {
-    // 忽略重复列错误
-  }
+  } catch (_e) {}
+  try {
+    await pool.query('ALTER TABLE audios ADD COLUMN user_id INT UNSIGNED')
+  } catch (_e) {}
   // -----------------------
 
   const adminEmail = process.env.ADMIN_EMAIL
@@ -410,11 +446,11 @@ app.get('/api/articles', requireAuth, async (req, res) => {
   }
   try {
     const { q } = req.query
-    let sql = 'SELECT * FROM articles'
-    const params = []
+    let sql = 'SELECT * FROM articles WHERE author_id = ?'
+    const params = [req.user.id]
     
     if (q) {
-      sql += ' WHERE title LIKE ? OR content LIKE ?'
+      sql += ' AND (title LIKE ? OR content LIKE ?)'
       params.push(`%${q}%`, `%${q}%`)
     }
     
@@ -448,7 +484,7 @@ app.get('/api/articles', requireAuth, async (req, res) => {
 app.get('/api/articles/:id', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
   try {
-    const [rows] = await pool.query('SELECT * FROM articles WHERE id = ?', [req.params.id])
+    const [rows] = await pool.query('SELECT * FROM articles WHERE id = ? AND author_id = ?', [req.params.id, req.user.id])
     if (rows.length === 0) {
       res.status(404).json({ ok: false, reason: 'not_found' })
       return
@@ -489,8 +525,8 @@ app.put('/api/articles/:id', requireAuth, async (req, res) => {
   const { title, content, tag, status, date, cover } = req.body
   try {
     await pool.query(
-      'UPDATE articles SET title=?, content=?, tag=?, status=?, publish_date=?, cover=? WHERE id=?',
-      [title, content, tag, status, date, cover, id]
+      'UPDATE articles SET title=?, content=?, tag=?, status=?, publish_date=?, cover=? WHERE id=? AND author_id=?',
+      [title, content, tag, status, date, cover, id, req.user.id]
     )
     res.json({ ok: true })
   } catch (error) {
@@ -504,7 +540,7 @@ app.delete('/api/articles/:id', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
   const { id } = req.params
   try {
-    await pool.query('DELETE FROM articles WHERE id = ?', [id])
+    await pool.query('DELETE FROM articles WHERE id = ? AND author_id = ?', [id, req.user.id])
     res.json({ ok: true })
   } catch (error) {
     console.error(error)
@@ -522,9 +558,10 @@ app.get('/api/image-groups', requireAuth, async (req, res) => {
       SELECT g.*, COUNT(i.id) as image_count 
       FROM image_groups g 
       LEFT JOIN images i ON g.id = i.group_id 
+      WHERE g.user_id = ?
       GROUP BY g.id 
       ORDER BY g.created_at ASC
-    `)
+    `, [req.user.id])
     res.json(rows)
   } catch (error) {
     console.error(error)
@@ -538,7 +575,7 @@ app.post('/api/image-groups', requireAuth, async (req, res) => {
   const { name } = req.body
   if (!name) return res.status(400).json({ ok: false, reason: 'missing_name' })
   try {
-    const [result] = await pool.query('INSERT INTO image_groups (name) VALUES (?)', [name])
+    const [result] = await pool.query('INSERT INTO image_groups (name, user_id) VALUES (?, ?)', [name, req.user.id])
     res.json({ ok: true, id: result.insertId, name })
   } catch (error) {
     console.error(error)
@@ -552,7 +589,7 @@ app.delete('/api/image-groups/:id', requireAuth, async (req, res) => {
   const { id } = req.params
   try {
     // 由于设置了 ON DELETE SET NULL，删除分组后，其中的图片 group_id 会自动变为 NULL
-    await pool.query('DELETE FROM image_groups WHERE id = ?', [id])
+    await pool.query('DELETE FROM image_groups WHERE id = ? AND user_id = ?', [id, req.user.id])
     res.json({ ok: true })
   } catch (error) {
     console.error(error)
@@ -566,8 +603,8 @@ app.get('/api/images', requireAuth, async (req, res) => {
   const { group_id, q } = req.query
   try {
     let sql = 'SELECT * FROM images'
-    const params = []
-    const conditions = []
+    const params = [req.user.id]
+    const conditions = ['user_id = ?']
 
     if (group_id !== undefined && group_id !== '') {
       if (group_id === 'null' || group_id === '0') {
@@ -602,7 +639,7 @@ app.delete('/api/images/:id', requireAuth, async (req, res) => {
   const { id } = req.params
   try {
     // 先查询图片路径以便删除文件
-    const [rows] = await pool.query('SELECT url FROM images WHERE id = ?', [id])
+    const [rows] = await pool.query('SELECT url FROM images WHERE id = ? AND user_id = ?', [id, req.user.id])
     if (rows.length > 0) {
       const url = rows[0].url
       // 从 URL 中提取物理文件名
@@ -612,7 +649,7 @@ app.delete('/api/images/:id', requireAuth, async (req, res) => {
         fs.unlinkSync(filePath)
       }
     }
-    await pool.query('DELETE FROM images WHERE id = ?', [id])
+    await pool.query('DELETE FROM images WHERE id = ? AND user_id = ?', [id, req.user.id])
     res.json({ ok: true })
   } catch (error) {
     console.error(error)
@@ -643,8 +680,8 @@ app.post('/api/upload/multiple', requireAuth, upload.array('files'), async (req,
       const displayFilename = file.originalname
       
       const [result] = await pool.query(
-        'INSERT INTO images (url, filename, group_id) VALUES (?, ?, ?)',
-        [url, displayFilename, groupId]
+        'INSERT INTO images (url, filename, group_id, user_id) VALUES (?, ?, ?, ?)',
+        [url, displayFilename, groupId, req.user.id]
       )
       results.push({
         id: result.insertId,
@@ -670,9 +707,10 @@ app.get('/api/video-groups', requireAuth, async (req, res) => {
       SELECT g.*, COUNT(v.id) as video_count 
       FROM video_groups g 
       LEFT JOIN videos v ON g.id = v.group_id 
+      WHERE g.user_id = ?
       GROUP BY g.id 
       ORDER BY g.created_at ASC
-    `)
+    `, [req.user.id])
     res.json(rows)
   } catch (error) {
     console.error(error)
@@ -686,7 +724,7 @@ app.post('/api/video-groups', requireAuth, async (req, res) => {
   const { name } = req.body
   if (!name) return res.status(400).json({ ok: false, reason: 'missing_name' })
   try {
-    const [result] = await pool.query('INSERT INTO video_groups (name) VALUES (?)', [name])
+    const [result] = await pool.query('INSERT INTO video_groups (name, user_id) VALUES (?, ?)', [name, req.user.id])
     res.json({ ok: true, id: result.insertId, name })
   } catch (error) {
     console.error(error)
@@ -699,7 +737,7 @@ app.delete('/api/video-groups/:id', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
   const { id } = req.params
   try {
-    await pool.query('DELETE FROM video_groups WHERE id = ?', [id])
+    await pool.query('DELETE FROM video_groups WHERE id = ? AND user_id = ?', [id, req.user.id])
     res.json({ ok: true })
   } catch (error) {
     console.error(error)
@@ -713,8 +751,8 @@ app.get('/api/videos', requireAuth, async (req, res) => {
   const { group_id, q } = req.query
   try {
     let sql = 'SELECT * FROM videos'
-    const params = []
-    const conditions = []
+    const params = [req.user.id]
+    const conditions = ['user_id = ?']
 
     if (group_id !== undefined && group_id !== '') {
       if (group_id === 'null' || group_id === '0') {
@@ -748,7 +786,7 @@ app.delete('/api/videos/:id', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
   const { id } = req.params
   try {
-    const [rows] = await pool.query('SELECT url FROM videos WHERE id = ?', [id])
+    const [rows] = await pool.query('SELECT url FROM videos WHERE id = ? AND user_id = ?', [id, req.user.id])
     if (rows.length > 0) {
       const url = rows[0].url
       const filename = url.split('/').pop()
@@ -757,7 +795,7 @@ app.delete('/api/videos/:id', requireAuth, async (req, res) => {
         fs.unlinkSync(filePath)
       }
     }
-    await pool.query('DELETE FROM videos WHERE id = ?', [id])
+    await pool.query('DELETE FROM videos WHERE id = ? AND user_id = ?', [id, req.user.id])
     res.json({ ok: true })
   } catch (error) {
     console.error(error)
@@ -788,8 +826,8 @@ app.post('/api/upload/videos', requireAuth, upload.array('files'), async (req, r
       const displayFilename = file.originalname
 
       const [result] = await pool.query(
-        'INSERT INTO videos (url, filename, group_id) VALUES (?, ?, ?)',
-        [url, displayFilename, groupId]
+        'INSERT INTO videos (url, filename, group_id, user_id) VALUES (?, ?, ?, ?)',
+        [url, displayFilename, groupId, req.user.id]
       )
       results.push({
         id: result.insertId,
@@ -811,47 +849,14 @@ app.post('/api/upload/videos', requireAuth, upload.array('files'), async (req, r
 app.get('/api/audio-groups', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
   try {
-    // 修复 LEFT JOIN 计数问题：
-    // 如果一个分组有多首歌，LEFT JOIN 会产生多行，GROUP BY g.id 会聚合这些行。
-    // COUNT(a.id) 会统计非 NULL 的 a.id 数量，这是正确的。
-    // 但是如果之前的 SQL 有问题，可能是因为数据问题或者其他。
-    // 让我们确保 SQL 是标准的。
     const [rows] = await pool.query(`
       SELECT g.*, COUNT(a.id) as audio_count 
       FROM audio_groups g 
       LEFT JOIN audios a ON g.id = a.group_id 
+      WHERE g.user_id = ?
       GROUP BY g.id 
       ORDER BY g.created_at ASC
-    `)
-    
-    // 如果前端使用 item.audios.length，那么我们需要把 audios 也返回去？
-    // 或者前端只用 audio_count？
-    // 前端之前改成了 item.audios ? item.audios.length : 0
-    // 这意味着前端期望返回 audios 数组。
-    // 但当前的 SQL 并没有返回 audios 数组，只返回了 audio_count。
-    // 所以我们需要修改 SQL 来返回 audios 列表，或者前端改回使用 audio_count。
-    // 既然用户说“统计的不正确”，可能是前端取不到 audios 数组导致 length 为 0（如果 audios undefined）。
-    
-    // 方案 A：在后端聚合 audios (比较复杂，MySQL GROUP_CONCAT 长度有限制)
-    // 方案 B：先查分组，再查所有 audios 组装（数据量大时慢）
-    // 方案 C：前端改回使用 audio_count，并确保后端返回正确的 audio_count。
-    
-    // 现在的 SQL 确实返回了 audio_count。
-    // 让我们检查前端代码。前端现在是 count: item.audios ? item.audios.length : 0
-    // 因为 /audio-groups 接口目前只返回 { id, name, created_at, audio_count }
-    // 所以 item.audios 是 undefined，导致 count 显示为 0。
-    
-    // 所以我们应该让前端使用 audio_count。
-    // 但用户说“有分组的统计的不正确”，可能就是因为显示为 0。
-    // 让我们恢复前端使用 audioCount，或者修改后端返回 audios（不推荐，数据量大）。
-    // 最好是前端用 audio_count。
-    
-    // 等等，用户之前说“歌曲数量统计的不对”，那是因为之前前端用的 item.audioCount || 0，
-    // 而后端返回的字段名是 audio_count (下划线)，不是 camelCase。
-    // 所以前端应该用 item.audio_count。
-    
-    // 让我们修改后端返回 camelCase 的字段，或者前端适配。
-    // 为了方便，我们在后端转换一下。
+    `, [req.user.id])
     
     const result = rows.map(row => ({
       ...row,
@@ -881,7 +886,7 @@ app.post('/api/audio-groups', requireAuth, upload.single('cover'), async (req, r
 
   if (!name) return res.status(400).json({ ok: false, reason: 'missing_name' })
   try {
-    const [result] = await pool.query('INSERT INTO audio_groups (name, cover) VALUES (?, ?)', [name, cover])
+    const [result] = await pool.query('INSERT INTO audio_groups (name, cover, user_id) VALUES (?, ?, ?)', [name, cover, req.user.id])
     res.json({ ok: true, id: result.insertId, name, cover })
   } catch (error) {
     console.error(error)
@@ -905,7 +910,7 @@ app.put('/api/audio-groups/:id', requireAuth, upload.single('cover'), async (req
   }
 
   try {
-    await pool.query('UPDATE audio_groups SET name = ?, cover = ? WHERE id = ?', [name, cover, id])
+    await pool.query('UPDATE audio_groups SET name = ?, cover = ? WHERE id = ? AND user_id = ?', [name, cover, id, req.user.id])
     res.json({ ok: true })
   } catch (error) {
     console.error(error)
@@ -918,7 +923,7 @@ app.delete('/api/audio-groups/:id', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
   const { id } = req.params
   try {
-    await pool.query('DELETE FROM audio_groups WHERE id = ?', [id])
+    await pool.query('DELETE FROM audio_groups WHERE id = ? AND user_id = ?', [id, req.user.id])
     res.json({ ok: true })
   } catch (error) {
     console.error(error)
@@ -932,8 +937,8 @@ app.get('/api/audios', requireAuth, async (req, res) => {
   const { group_id, q } = req.query
   try {
     let sql = 'SELECT * FROM audios'
-    const params = []
-    const conditions = []
+    const params = [req.user.id]
+    const conditions = ['user_id = ?']
 
     if (group_id !== undefined && group_id !== '') {
       if (group_id === 'null' || group_id === '0') {
@@ -999,9 +1004,10 @@ app.put('/api/audios/:id', requireAuth, async (req, res) => {
     }
     
     params.push(id)
+    params.push(req.user.id) // Add user check
     
     await pool.query(
-      `UPDATE audios SET ${updates.join(', ')} WHERE id=?`,
+      `UPDATE audios SET ${updates.join(', ')} WHERE id=? AND user_id=?`,
       params
     )
     res.json({ ok: true })
@@ -1016,7 +1022,7 @@ app.delete('/api/audios/:id', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
   const { id } = req.params
   try {
-    const [rows] = await pool.query('SELECT url FROM audios WHERE id = ?', [id])
+    const [rows] = await pool.query('SELECT url FROM audios WHERE id = ? AND user_id = ?', [id, req.user.id])
     if (rows.length > 0) {
       const url = rows[0].url
       const filename = url.split('/').pop()
@@ -1025,7 +1031,7 @@ app.delete('/api/audios/:id', requireAuth, async (req, res) => {
         fs.unlinkSync(filePath)
       }
     }
-    await pool.query('DELETE FROM audios WHERE id = ?', [id])
+    await pool.query('DELETE FROM audios WHERE id = ? AND user_id = ?', [id, req.user.id])
     res.json({ ok: true })
   } catch (error) {
     console.error(error)
@@ -1044,8 +1050,8 @@ app.post('/api/audios/link', requireAuth, async (req, res) => {
 
   try {
     const [result] = await pool.query(
-      'INSERT INTO audios (url, filename, singer, cover, lyrics, group_id) VALUES (?, ?, ?, ?, ?, ?)',
-      [url, filename, singer, cover, lyrics, group_id || null]
+      'INSERT INTO audios (url, filename, singer, cover, lyrics, group_id, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [url, filename, singer, cover, lyrics, group_id || null, req.user.id]
     )
     res.json({ ok: true, id: result.insertId })
   } catch (error) {
@@ -1128,8 +1134,8 @@ app.post('/api/upload/audios', requireAuth, upload.array('files'), async (req, r
       }
 
       const [result] = await pool.query(
-        'INSERT INTO audios (url, filename, group_id, lyrics, cover) VALUES (?, ?, ?, ?, ?)',
-        [url, displayFilename, groupId, lyrics, cover]
+        'INSERT INTO audios (url, filename, group_id, lyrics, cover, user_id) VALUES (?, ?, ?, ?, ?, ?)',
+        [url, displayFilename, groupId, lyrics, cover, req.user.id]
       )
       results.push({
         id: result.insertId,
@@ -1157,17 +1163,18 @@ app.post('/api/upload/audios', requireAuth, upload.array('files'), async (req, r
 app.get('/api/dashboard/stats', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
   try {
+    const userId = req.user.id
     // 1. 获取统计数据
-    const [articleCount] = await pool.query('SELECT COUNT(*) as count FROM articles')
-    const [imageCount] = await pool.query('SELECT COUNT(*) as count FROM images')
-    const [videoCount] = await pool.query('SELECT COUNT(*) as count FROM videos')
-    const [audioCount] = await pool.query('SELECT COUNT(*) as count FROM audios')
+    const [articleCount] = await pool.query('SELECT COUNT(*) as count FROM articles WHERE author_id = ?', [userId])
+    const [imageCount] = await pool.query('SELECT COUNT(*) as count FROM images WHERE user_id = ?', [userId])
+    const [videoCount] = await pool.query('SELECT COUNT(*) as count FROM videos WHERE user_id = ?', [userId])
+    const [audioCount] = await pool.query('SELECT COUNT(*) as count FROM audios WHERE user_id = ?', [userId])
 
     // 2. 获取最近动态 (合并各表最新的记录)
-    const [recentArticles] = await pool.query('SELECT id, title, created_at FROM articles ORDER BY created_at DESC LIMIT 3')
-    const [recentImages] = await pool.query('SELECT id, filename, created_at FROM images ORDER BY created_at DESC LIMIT 3')
-    const [recentVideos] = await pool.query('SELECT id, filename, created_at FROM videos ORDER BY created_at DESC LIMIT 3')
-    const [recentAudios] = await pool.query('SELECT id, filename, created_at FROM audios ORDER BY created_at DESC LIMIT 3')
+    const [recentArticles] = await pool.query('SELECT id, title, created_at FROM articles WHERE author_id = ? ORDER BY created_at DESC LIMIT 3', [userId])
+    const [recentImages] = await pool.query('SELECT id, filename, created_at FROM images WHERE user_id = ? ORDER BY created_at DESC LIMIT 3', [userId])
+    const [recentVideos] = await pool.query('SELECT id, filename, created_at FROM videos WHERE user_id = ? ORDER BY created_at DESC LIMIT 3', [userId])
+    const [recentAudios] = await pool.query('SELECT id, filename, created_at FROM audios WHERE user_id = ? ORDER BY created_at DESC LIMIT 3', [userId])
 
     let activities = []
 
@@ -1238,26 +1245,27 @@ app.get('/api/search', requireAuth, async (req, res) => {
 
   try {
     const likeQ = `%${q}%`
+    const userId = req.user.id
     
     // 并行查询四个表
     const [articles] = await pool.query(
-      'SELECT * FROM articles WHERE title LIKE ? OR content LIKE ? ORDER BY created_at DESC',
-      [likeQ, likeQ]
+      'SELECT * FROM articles WHERE author_id = ? AND (title LIKE ? OR content LIKE ?) ORDER BY created_at DESC',
+      [userId, likeQ, likeQ]
     )
     
     const [images] = await pool.query(
-      'SELECT * FROM images WHERE filename LIKE ? ORDER BY created_at DESC',
-      [likeQ]
+      'SELECT * FROM images WHERE user_id = ? AND filename LIKE ? ORDER BY created_at DESC',
+      [userId, likeQ]
     )
     
     const [videos] = await pool.query(
-      'SELECT * FROM videos WHERE filename LIKE ? ORDER BY created_at DESC',
-      [likeQ]
+      'SELECT * FROM videos WHERE user_id = ? AND filename LIKE ? ORDER BY created_at DESC',
+      [userId, likeQ]
     )
     
     const [audios] = await pool.query(
-      'SELECT * FROM audios WHERE filename LIKE ? OR singer LIKE ? ORDER BY created_at DESC',
-      [likeQ, likeQ]
+      'SELECT * FROM audios WHERE user_id = ? AND (filename LIKE ? OR singer LIKE ?) ORDER BY created_at DESC',
+      [userId, likeQ, likeQ]
     )
     
     // 格式化文章日期
