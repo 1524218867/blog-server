@@ -266,9 +266,17 @@ const ensureSchema = async () => {
       title VARCHAR(255) NOT NULL,
       url VARCHAR(1024) NOT NULL,
       icon VARCHAR(255),
+      category VARCHAR(255) DEFAULT '未分类',
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   `)
+  
+  // 尝试添加 category 字段（如果表已存在但字段不存在）
+  try {
+    await pool.query("ALTER TABLE bookmarks ADD COLUMN category VARCHAR(255) DEFAULT '未分类'")
+  } catch (e) {
+    // 忽略错误（字段可能已存在）
+  }
 
   const adminEmail = process.env.ADMIN_EMAIL
   const adminPassword = process.env.ADMIN_PASSWORD
@@ -1322,16 +1330,16 @@ app.get('/api/bookmarks', requireAuth, async (req, res) => {
 
 app.post('/api/bookmarks', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
-  const { title, url, icon } = req.body
+  const { title, url, icon, category } = req.body
   try {
     const [result] = await pool.query(
-      'INSERT INTO bookmarks (user_id, title, url, icon) VALUES (?, ?, ?, ?)',
-      [req.user.id, title, url, icon || null]
+      'INSERT INTO bookmarks (user_id, title, url, icon, category) VALUES (?, ?, ?, ?, ?)',
+      [req.user.id, title, url, icon || null, category || '未分类']
     )
     res.json({ ok: true, id: result.insertId })
   } catch (error) {
     console.error(error)
-    res.status(500).json({ ok: false })
+    res.status(500).json({ ok: false, reason: 'db_error' })
   }
 })
 
@@ -1349,9 +1357,10 @@ app.delete('/api/bookmarks/:id', requireAuth, async (req, res) => {
   }
 })
 
+// 批量导入书签
 app.post('/api/bookmarks/batch', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
-  const { bookmarks } = req.body // Expects array of { title, url, icon? }
+  const { bookmarks } = req.body
   if (!Array.isArray(bookmarks)) return res.status(400).json({ ok: false })
   
   const conn = await pool.getConnection()
@@ -1359,8 +1368,8 @@ app.post('/api/bookmarks/batch', requireAuth, async (req, res) => {
     await conn.beginTransaction()
     for (const bm of bookmarks) {
       await conn.query(
-        'INSERT INTO bookmarks (user_id, title, url, icon) VALUES (?, ?, ?, ?)',
-        [req.user.id, bm.title, bm.url, bm.icon || null]
+        'INSERT INTO bookmarks (user_id, title, url, icon, category) VALUES (?, ?, ?, ?, ?)',
+        [req.user.id, bm.title, bm.url, bm.icon || null, bm.category || '未分类']
       )
     }
     await conn.commit()
