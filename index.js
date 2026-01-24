@@ -966,11 +966,43 @@ app.get('/api/audios', requireAuth, async (req, res) => {
 app.put('/api/audios/:id', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
   const { id } = req.params
-  const { filename, singer, lyrics, cover } = req.body
+  const { filename, singer, lyrics, cover, group_id } = req.body
   try {
+    // 动态构建更新语句
+    const updates = []
+    const params = []
+    
+    if (filename !== undefined) {
+      updates.push('filename=?')
+      params.push(filename)
+    }
+    if (singer !== undefined) {
+      updates.push('singer=?')
+      params.push(singer)
+    }
+    if (lyrics !== undefined) {
+      updates.push('lyrics=?')
+      params.push(lyrics)
+    }
+    if (cover !== undefined) {
+      updates.push('cover=?')
+      params.push(cover)
+    }
+    if (group_id !== undefined) {
+      updates.push('group_id=?')
+      // 如果是 -1，则设置为 NULL（未分组）
+      params.push(group_id === -1 ? null : group_id)
+    }
+    
+    if (updates.length === 0) {
+      return res.json({ ok: true })
+    }
+    
+    params.push(id)
+    
     await pool.query(
-      'UPDATE audios SET filename=?, singer=?, lyrics=?, cover=? WHERE id=?',
-      [filename, singer, lyrics, cover, id]
+      `UPDATE audios SET ${updates.join(', ')} WHERE id=?`,
+      params
     )
     res.json({ ok: true })
   } catch (error) {
