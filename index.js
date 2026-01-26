@@ -1343,6 +1343,21 @@ app.post('/api/bookmarks', requireAuth, async (req, res) => {
   }
 })
 
+app.put('/api/bookmarks/:id', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ ok: false })
+  const { title, url, icon, category } = req.body
+  try {
+    await pool.query(
+      'UPDATE bookmarks SET title=?, url=?, icon=?, category=? WHERE id=? AND user_id=?',
+      [title, url, icon, category, req.params.id, req.user.id]
+    )
+    res.json({ ok: true })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ ok: false })
+  }
+})
+
 app.delete('/api/bookmarks/:id', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
   try {
@@ -1350,6 +1365,47 @@ app.delete('/api/bookmarks/:id', requireAuth, async (req, res) => {
       'DELETE FROM bookmarks WHERE id = ? AND user_id = ?',
       [req.params.id, req.user.id]
     )
+    res.json({ ok: true })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ ok: false })
+  }
+})
+
+// 分组重命名
+app.put('/api/bookmark-groups/rename', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ ok: false })
+  const { oldName, newName } = req.body
+  if (!oldName || !newName) return res.status(400).json({ ok: false })
+  try {
+    await pool.query(
+      'UPDATE bookmarks SET category=? WHERE category=? AND user_id=?',
+      [newName, oldName, req.user.id]
+    )
+    res.json({ ok: true })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ ok: false })
+  }
+})
+
+// 分组删除
+app.delete('/api/bookmark-groups', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ ok: false })
+  const { name, keepBookmarks } = req.query
+  if (!name) return res.status(400).json({ ok: false })
+  try {
+    if (keepBookmarks === 'true') {
+        await pool.query(
+            "UPDATE bookmarks SET category='未分类' WHERE category=? AND user_id=?",
+            [name, req.user.id]
+        )
+    } else {
+        await pool.query(
+            'DELETE FROM bookmarks WHERE category=? AND user_id=?',
+            [name, req.user.id]
+        )
+    }
     res.json({ ok: true })
   } catch (error) {
     console.error(error)
