@@ -1214,6 +1214,33 @@ app.get('/api/dashboard/home-data', requireAuth, async (req, res) => {
   try {
     const userId = req.user.id
 
+    // 临时：确保新表存在（防止初始化失败）
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS content_history (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        user_id INT UNSIGNED NOT NULL,
+        content_type ENUM('article', 'image', 'video', 'audio') NOT NULL,
+        content_id INT UNSIGNED NOT NULL,
+        last_access_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        progress INT DEFAULT 0,
+        is_finished BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_access (user_id, content_type, content_id),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS content_pins (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        user_id INT UNSIGNED NOT NULL,
+        content_type ENUM('article', 'image', 'video', 'audio') NOT NULL,
+        content_id INT UNSIGNED NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_pin (user_id, content_type, content_id),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `)
+
     // Helper: 获取详细信息
     const fetchDetails = async (type, id) => {
       let table = ''
@@ -1317,19 +1344,19 @@ app.get('/api/dashboard/home-data', requireAuth, async (req, res) => {
     recentList = recentList.slice(0, 10)
 
     res.json({
-      ok: true,
-      data: {
-        pinnedList,
-        recentlyUsedList,
-        unfinishedList,
-        recentlyAddedList: recentList
-      }
-    })
-  } catch (error) {
-    console.error(error)
-    res.status(500).json({ ok: false, reason: 'db_error' })
-  }
-})
+       ok: true,
+       data: {
+         pinnedList,
+         recentlyUsedList,
+         unfinishedList,
+         recentlyAddedList: recentList
+       }
+     })
+   } catch (error) {
+     console.error(error)
+     res.status(500).json({ ok: false, reason: 'db_error', message: error.message, sql: error.sql })
+   }
+ })
 
 // --- 记录访问历史/进度接口 ---
 app.post('/api/content/history', requireAuth, async (req, res) => {
