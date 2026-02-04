@@ -135,10 +135,10 @@ const ensureSchema = async () => {
       user_id INT UNSIGNED NOT NULL,
       content_type ENUM('article', 'image', 'video', 'audio') NOT NULL,
       content_id INT UNSIGNED NOT NULL,
-      last_access_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      last_access_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       progress INT DEFAULT 0, -- 播放进度或阅读进度
       is_finished BOOLEAN DEFAULT FALSE,
-      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      created_at DATETIME NOT NULL,
       UNIQUE KEY unique_access (user_id, content_type, content_id),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
@@ -1368,8 +1368,8 @@ app.post('/api/content/history', requireAuth, async (req, res) => {
   try {
     // 使用 ON DUPLICATE KEY UPDATE
     await pool.query(`
-      INSERT INTO content_history (user_id, content_type, content_id, last_access_time, progress, is_finished)
-      VALUES (?, ?, ?, NOW(), ?, ?)
+      INSERT INTO content_history (user_id, content_type, content_id, last_access_time, progress, is_finished, created_at)
+      VALUES (?, ?, ?, NOW(), ?, ?, NOW())
       ON DUPLICATE KEY UPDATE
         last_access_time = NOW(),
         progress = VALUES(progress),
