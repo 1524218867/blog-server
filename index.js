@@ -128,6 +128,35 @@ const ensureSchema = async () => {
     }
   }
 
+  // --- 新增：内容访问/使用记录表 ---
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS content_history (
+      id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+      user_id INT UNSIGNED NOT NULL,
+      content_type ENUM('article', 'image', 'video', 'audio') NOT NULL,
+      content_id INT UNSIGNED NOT NULL,
+      last_access_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      progress INT DEFAULT 0, -- 播放进度或阅读进度
+      is_finished BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY unique_access (user_id, content_type, content_id),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `)
+
+  // --- 新增：内容置顶表 ---
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS content_pins (
+      id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+      user_id INT UNSIGNED NOT NULL,
+      content_type ENUM('article', 'image', 'video', 'audio') NOT NULL,
+      content_id INT UNSIGNED NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY unique_pin (user_id, content_type, content_id),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `)
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS articles (
       id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -1173,6 +1202,179 @@ app.post('/api/upload/audios', requireAuth, upload.array('files'), async (req, r
     // 考虑到用户可能不小心传错名，保留着比较安全，或者后续可以清理。
     
     res.json({ ok: true, files: results })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ ok: false, reason: 'db_error' })
+  }
+})
+
+// --- 首页数据聚合接口 ---
+app.get('/api/dashboard/home-data', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ ok: false })
+  try {
+    const userId = req.user.id
+
+    // Helper: 获取详细信息
+    const fetchDetails = async (type, id) => {
+      let table = ''
+      if (type === 'article') table = 'articles'
+      else if (type === 'image') table = 'images'
+      else if (type === 'video') table = 'videos'
+      else if (type === 'audio') table = 'audios'
+      
+      if (!table) return null
+
+      const [rows] = await pool.query(`SELECT * FROM ${table} WHERE id = ?`, [id])
+      if (rows.length === 0) return null
+      
+      const item = rows[0]
+      // 统一格式
+      return {
+        id: item.id,
+        title: item.title || item.filename, // 图片/视频/音频可能没有 title
+        type,
+        cover: item.cover || item.url, // 图片直接用 url，视频/音频/文章用 cover
+        desc: item.description || item.singer || '', // 简单适配
+        createTime: item.created_at,
+        // 特定字段
+        url: item.url,
+        duration: item.duration
+      }
+    }
+
+    // 1. 获取置顶内容 (Pinned)
+    const [pinnedRows] = await pool.query(
+      'SELECT content_type, content_id FROM content_pins WHERE user_id = ? ORDER BY created_at DESC',
+      [userId]
+    )
+    
+    const pinnedList = []
+    for (const row of pinnedRows) {
+      const detail = await fetchDetails(row.content_type, row.content_id)
+      if (detail) pinnedList.push(detail)
+    }
+
+    // 2. 获取最近使用 (Recently Used) - 从 history 表
+    const [historyRows] = await pool.query(
+      'SELECT content_type, content_id, last_access_time, progress FROM content_history WHERE user_id = ? ORDER BY last_access_time DESC LIMIT 10',
+      [userId]
+    )
+    
+    const recentlyUsedList = []
+    for (const row of historyRows) {
+      const detail = await fetchDetails(row.content_type, row.content_id)
+      if (detail) {
+        recentlyUsedList.push({
+          ...detail,
+          lastAccessTime: row.last_access_time,
+          progress: row.progress
+        })
+      }
+    }
+
+    // 3. 获取未完成 (Unfinished) - 从 history 表筛选 is_finished = false
+    const [unfinishedRows] = await pool.query(
+      'SELECT content_type, content_id, last_access_time, progress FROM content_history WHERE user_id = ? AND is_finished = FALSE ORDER BY last_access_time DESC LIMIT 10',
+      [userId]
+    )
+    
+    const unfinishedList = []
+    for (const row of unfinishedRows) {
+      const detail = await fetchDetails(row.content_type, row.content_id)
+      if (detail) {
+        unfinishedList.push({
+          ...detail,
+          lastAccessTime: row.last_access_time,
+          progress: row.progress
+        })
+      }
+    }
+
+    // 4. 获取最近添加 (Recently Added) - 聚合各表最新数据
+    // 简化处理：分别取最新的几个，然后混排
+    const [recentArticles] = await pool.query('SELECT id, title, created_at, cover FROM articles WHERE author_id = ? ORDER BY created_at DESC LIMIT 5', [userId])
+    const [recentImages] = await pool.query('SELECT id, filename, url, created_at FROM images WHERE user_id = ? ORDER BY created_at DESC LIMIT 5', [userId])
+    const [recentVideos] = await pool.query('SELECT id, filename, cover, created_at FROM videos WHERE user_id = ? ORDER BY created_at DESC LIMIT 5', [userId])
+    const [recentAudios] = await pool.query('SELECT id, filename, cover, created_at, singer FROM audios WHERE user_id = ? ORDER BY created_at DESC LIMIT 5', [userId])
+
+    let recentList = []
+    
+    recentArticles.forEach(i => recentList.push({ 
+      id: i.id, title: i.title, type: 'article', cover: i.cover, createTime: i.created_at 
+    }))
+    recentImages.forEach(i => recentList.push({ 
+      id: i.id, title: i.filename, type: 'image', cover: i.url, createTime: i.created_at 
+    }))
+    recentVideos.forEach(i => recentList.push({ 
+      id: i.id, title: i.filename, type: 'video', cover: i.cover, createTime: i.created_at 
+    }))
+    recentAudios.forEach(i => recentList.push({ 
+      id: i.id, title: i.filename, type: 'audio', cover: i.cover, desc: i.singer, createTime: i.created_at 
+    }))
+
+    // 按时间倒序并取前 10
+    recentList.sort((a, b) => new Date(b.createTime) - new Date(a.createTime))
+    recentList = recentList.slice(0, 10)
+
+    res.json({
+      ok: true,
+      data: {
+        pinnedList,
+        recentlyUsedList,
+        unfinishedList,
+        recentlyAddedList: recentList
+      }
+    })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ ok: false, reason: 'db_error' })
+  }
+})
+
+// --- 记录访问历史/进度接口 ---
+app.post('/api/content/history', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ ok: false })
+  const { type, id, progress, isFinished } = req.body
+  
+  if (!type || !id) return res.status(400).json({ ok: false, reason: 'missing_params' })
+
+  try {
+    // 使用 ON DUPLICATE KEY UPDATE
+    await pool.query(`
+      INSERT INTO content_history (user_id, content_type, content_id, last_access_time, progress, is_finished)
+      VALUES (?, ?, ?, NOW(), ?, ?)
+      ON DUPLICATE KEY UPDATE
+        last_access_time = NOW(),
+        progress = VALUES(progress),
+        is_finished = VALUES(is_finished)
+    `, [req.user.id, type, id, progress || 0, isFinished ? 1 : 0])
+    
+    res.json({ ok: true })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ ok: false, reason: 'db_error' })
+  }
+})
+
+// --- 置顶/取消置顶接口 ---
+app.post('/api/content/pin', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ ok: false })
+  const { type, id, isPinned } = req.body
+  
+  if (!type || !id) return res.status(400).json({ ok: false, reason: 'missing_params' })
+
+  try {
+    if (isPinned) {
+      await pool.query(`
+        INSERT IGNORE INTO content_pins (user_id, content_type, content_id)
+        VALUES (?, ?, ?)
+      `, [req.user.id, type, id])
+    } else {
+      await pool.query(`
+        DELETE FROM content_pins WHERE user_id = ? AND content_type = ? AND content_id = ?
+      `, [req.user.id, type, id])
+    }
+    res.json({ ok: true })
   } catch (error) {
     console.error(error)
     res.status(500).json({ ok: false, reason: 'db_error' })
