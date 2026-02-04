@@ -1221,10 +1221,10 @@ app.get('/api/dashboard/home-data', requireAuth, async (req, res) => {
         user_id INT UNSIGNED NOT NULL,
         content_type ENUM('article', 'image', 'video', 'audio') NOT NULL,
         content_id INT UNSIGNED NOT NULL,
-        last_access_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        last_access_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         progress INT DEFAULT 0,
         is_finished BOOLEAN DEFAULT FALSE,
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        created_at DATETIME NOT NULL,
         UNIQUE KEY unique_access (user_id, content_type, content_id),
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       )
