@@ -495,15 +495,19 @@ app.get('/api/articles', requireAuth, async (req, res) => {
   }
   try {
     const { q } = req.query
-    let sql = 'SELECT * FROM articles WHERE author_id = ?'
+    let sql = `
+      SELECT a.*, CASE WHEN cp.id IS NOT NULL THEN 1 ELSE 0 END as isPinned 
+      FROM articles a 
+      LEFT JOIN content_pins cp ON a.id = cp.content_id AND cp.content_type = 'article' AND cp.user_id = a.author_id 
+      WHERE a.author_id = ?`
     const params = [req.user.id]
     
     if (q) {
-      sql += ' AND (title LIKE ? OR content LIKE ?)'
+      sql += ' AND (a.title LIKE ? OR a.content LIKE ?)'
       params.push(`%${q}%`, `%${q}%`)
     }
     
-    sql += ' ORDER BY created_at DESC'
+    sql += ' ORDER BY a.created_at DESC'
     const [rows] = await pool.query(sql, params)
     // 格式化日期以匹配前端需求 (YYYY-MM-DD)
     const list = rows.map(row => {
@@ -519,6 +523,7 @@ app.get('/api/articles', requireAuth, async (req, res) => {
       
       return {
         ...row,
+        isPinned: !!row.isPinned,
         date: dateStr
       }
     })
@@ -651,21 +656,24 @@ app.get('/api/images', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
   const { group_id, q } = req.query
   try {
-    let sql = 'SELECT * FROM images'
+    let sql = `
+      SELECT i.*, CASE WHEN cp.id IS NOT NULL THEN 1 ELSE 0 END as isPinned 
+      FROM images i 
+      LEFT JOIN content_pins cp ON i.id = cp.content_id AND cp.content_type = 'image' AND cp.user_id = i.user_id`
     const params = [req.user.id]
-    const conditions = ['user_id = ?']
+    const conditions = ['i.user_id = ?']
 
     if (group_id !== undefined && group_id !== '') {
       if (group_id === 'null' || group_id === '0') {
-        conditions.push('group_id IS NULL')
+        conditions.push('i.group_id IS NULL')
       } else {
-        conditions.push('group_id = ?')
+        conditions.push('i.group_id = ?')
         params.push(group_id)
       }
     }
 
     if (q) {
-      conditions.push('filename LIKE ?')
+      conditions.push('i.filename LIKE ?')
       params.push(`%${q}%`)
     }
 
@@ -673,9 +681,13 @@ app.get('/api/images', requireAuth, async (req, res) => {
       sql += ' WHERE ' + conditions.join(' AND ')
     }
 
-    sql += ' ORDER BY created_at DESC'
+    sql += ' ORDER BY i.created_at DESC'
     const [rows] = await pool.query(sql, params)
-    res.json(rows)
+    const list = rows.map(row => ({
+      ...row,
+      isPinned: !!row.isPinned
+    }))
+    res.json(list)
   } catch (error) {
     console.error(error)
     res.status(500).json({ ok: false, reason: 'db_error' })
@@ -799,21 +811,24 @@ app.get('/api/videos', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
   const { group_id, q } = req.query
   try {
-    let sql = 'SELECT * FROM videos'
+    let sql = `
+      SELECT v.*, CASE WHEN cp.id IS NOT NULL THEN 1 ELSE 0 END as isPinned 
+      FROM videos v 
+      LEFT JOIN content_pins cp ON v.id = cp.content_id AND cp.content_type = 'video' AND cp.user_id = v.user_id`
     const params = [req.user.id]
-    const conditions = ['user_id = ?']
+    const conditions = ['v.user_id = ?']
 
     if (group_id !== undefined && group_id !== '') {
       if (group_id === 'null' || group_id === '0') {
-        conditions.push('group_id IS NULL')
+        conditions.push('v.group_id IS NULL')
       } else {
-        conditions.push('group_id = ?')
+        conditions.push('v.group_id = ?')
         params.push(group_id)
       }
     }
 
     if (q) {
-      conditions.push('filename LIKE ?')
+      conditions.push('v.filename LIKE ?')
       params.push(`%${q}%`)
     }
 
@@ -821,9 +836,13 @@ app.get('/api/videos', requireAuth, async (req, res) => {
       sql += ' WHERE ' + conditions.join(' AND ')
     }
 
-    sql += ' ORDER BY created_at DESC'
+    sql += ' ORDER BY v.created_at DESC'
     const [rows] = await pool.query(sql, params)
-    res.json(rows)
+    const list = rows.map(row => ({
+      ...row,
+      isPinned: !!row.isPinned
+    }))
+    res.json(list)
   } catch (error) {
     console.error(error)
     res.status(500).json({ ok: false, reason: 'db_error' })
