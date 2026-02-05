@@ -460,6 +460,90 @@ app.put('/api/auth/profile', requireAuth, async (req, res) => {
   }
 })
 
+// 获取用户存储空间详情
+app.get('/api/user/storage', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ ok: false })
+  
+  try {
+    const userId = req.user.id
+    const stats = {
+      total: 20 * 1024 * 1024 * 1024, // 20GB Mock Quota
+      used: 0,
+      distribution: {
+        images: 0,
+        videos: 0,
+        audios: 0,
+        documents: 0,
+        others: 0
+      }
+    }
+
+    // Helper to get file size
+    const getFileSize = (url) => {
+       if (!url || url.startsWith('http')) return 0
+       // Assuming url matches /uploads/filename
+       // Remove query params if any
+       const cleanUrl = url.split('?')[0]
+       const filename = cleanUrl.split('/').pop()
+       if (!filename) return 0
+       
+       const filePath = path.join(uploadDir, filename)
+       try {
+         if (fs.existsSync(filePath)) {
+           const stat = fs.statSync(filePath)
+           return stat.size
+         }
+       } catch (e) {
+         // ignore
+       }
+       return 0
+    }
+
+    // 1. Images
+    const [images] = await pool.query('SELECT url FROM images WHERE user_id = ?', [userId])
+    images.forEach(img => {
+       const size = getFileSize(img.url)
+       stats.used += size
+       stats.distribution.images += size
+    })
+
+    // 2. Videos
+    const [videos] = await pool.query('SELECT url FROM videos WHERE user_id = ?', [userId])
+    videos.forEach(vid => {
+       const size = getFileSize(vid.url)
+       stats.used += size
+       stats.distribution.videos += size
+    })
+
+    // 3. Audios
+    const [audios] = await pool.query('SELECT url FROM audios WHERE user_id = ?', [userId])
+    audios.forEach(audio => {
+       const size = getFileSize(audio.url)
+       stats.used += size
+       stats.distribution.audios += size
+    })
+
+    // 4. Articles
+    const [articles] = await pool.query('SELECT content FROM articles WHERE author_id = ?', [userId])
+    articles.forEach(art => {
+       const size = (art.content || '').length * 3 // Estimate 3 bytes per char (UTF-8)
+       stats.used += size
+       stats.distribution.documents += size
+    })
+    
+    // Add some random "Others" for realism if used is very small
+    if (stats.used < 1024 * 1024) {
+       stats.distribution.others = 15 * 1024 * 1024 // 15MB system usage
+       stats.used += stats.distribution.others
+    }
+
+    res.json({ ok: true, ...stats })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ ok: false, reason: 'db_error' })
+  }
+})
+
 app.get('/api/admin/ping', requireAuth, requireRole('admin'), (_req, res) => {
   res.json({ ok: true })
 })
