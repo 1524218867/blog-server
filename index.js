@@ -466,8 +466,17 @@ app.get('/api/user/storage', requireAuth, async (req, res) => {
   
   try {
     const userId = req.user.id
+    // 获取磁盘空间信息
+    let diskTotal = 20 * 1024 * 1024 * 1024 // Fallback
+    try {
+      const fsStats = fs.statfsSync(uploadDir)
+      diskTotal = fsStats.bsize * fsStats.blocks
+    } catch (e) {
+      console.warn('fs.statfsSync failed:', e)
+    }
+
     const stats = {
-      total: 20 * 1024 * 1024 * 1024, // 20GB Mock Quota
+      total: diskTotal,
       used: 0,
       distribution: {
         images: 0,
@@ -480,11 +489,18 @@ app.get('/api/user/storage', requireAuth, async (req, res) => {
 
     // Helper to get file size
     const getFileSize = (url) => {
-       if (!url || url.startsWith('http')) return 0
-       // Assuming url matches /uploads/filename
-       // Remove query params if any
-       const cleanUrl = url.split('?')[0]
-       const filename = cleanUrl.split('/').pop()
+       if (!url) return 0
+       
+       let filename = url
+       // Handle full URLs like http://.../uploads/xxx.jpg
+       if (url.startsWith('http') || url.startsWith('//')) {
+         const parts = url.split('/')
+         filename = parts[parts.length - 1]
+       }
+       
+       // Remove query params
+       filename = filename.split('?')[0]
+       
        if (!filename) return 0
        
        const filePath = path.join(uploadDir, filename)
