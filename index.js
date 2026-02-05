@@ -1402,6 +1402,66 @@ app.post('/api/content/history', requireAuth, async (req, res) => {
   }
 })
 
+// Helper: 获取详细信息 (用于历史列表)
+const fetchContentDetails = async (type, id) => {
+  let table = ''
+  if (type === 'article') table = 'articles'
+  else if (type === 'image') table = 'images'
+  else if (type === 'video') table = 'videos'
+  else if (type === 'audio') table = 'audios'
+  
+  if (!table) return null
+
+  const [rows] = await pool.query(`SELECT * FROM ${table} WHERE id = ?`, [id])
+  if (rows.length === 0) return null
+  
+  const item = rows[0]
+  // 统一格式
+  return {
+    id: item.id,
+    title: item.title || item.filename, // 图片/视频/音频可能没有 title
+    type,
+    cover: item.cover || item.url, // 图片直接用 url，视频/音频/文章用 cover
+    desc: item.description || item.singer || '', // 简单适配
+    createTime: item.created_at,
+    // 特定字段
+    url: item.url,
+    duration: item.duration
+  }
+}
+
+// --- 获取历史记录列表 ---
+app.get('/api/content/history-list', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ ok: false })
+  const { limit = 20, offset = 0 } = req.query
+  const userId = req.user.id
+
+  try {
+    const [rows] = await pool.query(
+      'SELECT content_type, content_id, last_access_time, progress, is_finished FROM content_history WHERE user_id = ? ORDER BY last_access_time DESC LIMIT ? OFFSET ?',
+      [userId, Number(limit), Number(offset)]
+    )
+
+    const list = []
+    for (const row of rows) {
+      const detail = await fetchContentDetails(row.content_type, row.content_id)
+      if (detail) {
+        list.push({
+          ...detail,
+          lastAccessTime: row.last_access_time,
+          progress: row.progress,
+          isFinished: !!row.is_finished
+        })
+      }
+    }
+    
+    res.json({ ok: true, list })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ ok: false, reason: 'db_error' })
+  }
+})
+
 // --- 置顶/取消置顶接口 ---
 app.post('/api/content/pin', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
