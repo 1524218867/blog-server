@@ -1462,6 +1462,24 @@ app.get('/api/content/history-list', requireAuth, async (req, res) => {
   }
 })
 
+// 删除历史记录
+app.delete('/api/content/history', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ ok: false })
+  const { type, id } = req.query
+  if (!type || !id) return res.status(400).json({ ok: false, reason: 'missing_params' })
+  
+  try {
+    await pool.query(
+      'DELETE FROM content_history WHERE user_id = ? AND content_type = ? AND content_id = ?',
+      [req.user.id, type, id]
+    )
+    res.json({ ok: true })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ ok: false, reason: 'db_error' })
+  }
+})
+
 // --- 置顶/取消置顶接口 ---
 app.post('/api/content/pin', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
