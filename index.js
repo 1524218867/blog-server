@@ -1402,7 +1402,7 @@ app.get('/api/dashboard/home-data', requireAuth, async (req, res) => {
 
     // 2. 获取最近使用 (Recently Used) - 从 history 表
     const [historyRows] = await pool.query(
-      'SELECT content_type, content_id, last_access_time, progress FROM content_history WHERE user_id = ? ORDER BY last_access_time DESC LIMIT 10',
+      'SELECT content_type, content_id, last_access_time, progress FROM content_history WHERE user_id = ? ORDER BY last_access_time DESC LIMIT 6',
       [userId]
     )
     
@@ -1418,9 +1418,17 @@ app.get('/api/dashboard/home-data', requireAuth, async (req, res) => {
       }
     }
 
-    // 3. 获取未完成 (Unfinished) - 从 history 表筛选 is_finished = false
+    // 3. 获取未完成 (Continue Using) - 进度 (0%, 95%)，30天内，1-3个
     const [unfinishedRows] = await pool.query(
-      'SELECT content_type, content_id, last_access_time, progress FROM content_history WHERE user_id = ? AND is_finished = FALSE ORDER BY last_access_time DESC LIMIT 10',
+      `SELECT content_type, content_id, last_access_time, progress 
+       FROM content_history 
+       WHERE user_id = ? 
+         AND is_finished = FALSE 
+         AND progress > 0 
+         AND progress < 95
+         AND last_access_time > DATE_SUB(NOW(), INTERVAL 30 DAY)
+       ORDER BY last_access_time DESC 
+       LIMIT 3`,
       [userId]
     )
     
@@ -1436,27 +1444,40 @@ app.get('/api/dashboard/home-data', requireAuth, async (req, res) => {
       }
     }
 
-    // 4. 获取最近添加 (Recently Added) - 聚合各表最新数据
-    // 简化处理：分别取最新的几个，然后混排
-    const [recentArticles] = await pool.query('SELECT id, title, created_at, cover FROM articles WHERE author_id = ? ORDER BY created_at DESC LIMIT 5', [userId])
-    const [recentImages] = await pool.query('SELECT id, filename, url, created_at FROM images WHERE user_id = ? ORDER BY created_at DESC LIMIT 5', [userId])
-    const [recentVideos] = await pool.query('SELECT id, filename, cover, created_at FROM videos WHERE user_id = ? ORDER BY created_at DESC LIMIT 5', [userId])
-    const [recentAudios] = await pool.query('SELECT id, filename, cover, created_at, singer FROM audios WHERE user_id = ? ORDER BY created_at DESC LIMIT 5', [userId])
+    // 4. 获取最近添加 (Recently Added) - 从未打开过
+    // 获取用户历史记录 Set 用于过滤
+    const [userHistory] = await pool.query('SELECT content_type, content_id FROM content_history WHERE user_id = ?', [userId])
+    const historySet = new Set(userHistory.map(h => `${h.content_type}:${h.content_id}`))
+
+    // 聚合各表最新数据 (取多一点以便过滤)
+    const fetchLimit = 20
+    const [recentArticles] = await pool.query('SELECT id, title, created_at, cover FROM articles WHERE author_id = ? ORDER BY created_at DESC LIMIT ?', [userId, fetchLimit])
+    const [recentImages] = await pool.query('SELECT id, filename, url, created_at FROM images WHERE user_id = ? ORDER BY created_at DESC LIMIT ?', [userId, fetchLimit])
+    const [recentVideos] = await pool.query('SELECT id, filename, cover, created_at FROM videos WHERE user_id = ? ORDER BY created_at DESC LIMIT ?', [userId, fetchLimit])
+    const [recentAudios] = await pool.query('SELECT id, filename, cover, created_at, singer FROM audios WHERE user_id = ? ORDER BY created_at DESC LIMIT ?', [userId, fetchLimit])
 
     let recentList = []
     
-    recentArticles.forEach(i => recentList.push({ 
-      id: i.id, title: i.title, type: 'article', cover: i.cover, createTime: i.created_at 
-    }))
-    recentImages.forEach(i => recentList.push({ 
-      id: i.id, title: i.filename, type: 'image', cover: i.url, createTime: i.created_at 
-    }))
-    recentVideos.forEach(i => recentList.push({ 
-      id: i.id, title: i.filename, type: 'video', cover: i.cover, createTime: i.created_at 
-    }))
-    recentAudios.forEach(i => recentList.push({ 
-      id: i.id, title: i.filename, type: 'audio', cover: i.cover, desc: i.singer, createTime: i.created_at 
-    }))
+    const addToRecent = (items, type) => {
+      items.forEach(i => {
+        // 过滤掉已在历史记录中的
+        if (!historySet.has(`${type}:${i.id}`)) {
+          recentList.push({ 
+            id: i.id, 
+            title: i.title || i.filename, 
+            type: type, 
+            cover: i.cover || i.url, 
+            desc: i.singer || '',
+            createTime: i.created_at 
+          })
+        }
+      })
+    }
+
+    addToRecent(recentArticles, 'article')
+    addToRecent(recentImages, 'image')
+    addToRecent(recentVideos, 'video')
+    addToRecent(recentAudios, 'audio')
 
     // 按时间倒序并取前 10
     recentList.sort((a, b) => new Date(b.createTime) - new Date(a.createTime))
