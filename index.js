@@ -146,6 +146,30 @@ const ensureSchema = async () => {
     }
   }
 
+  // --- 新增：标签系统 ---
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tags (
+      id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+      user_id INT UNSIGNED NOT NULL,
+      name VARCHAR(50) NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY unique_tag_name (user_id, name),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `)
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS content_tags (
+      id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+      content_type ENUM('article', 'image', 'video', 'audio') NOT NULL,
+      content_id INT UNSIGNED NOT NULL,
+      tag_id INT UNSIGNED NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY unique_content_tag (content_type, content_id, tag_id),
+      FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+    )
+  `)
+
   // --- 新增：内容访问/使用记录表 ---
   await pool.query(`
     CREATE TABLE IF NOT EXISTS content_history (
@@ -1038,6 +1062,117 @@ app.post('/api/upload/videos', requireAuth, upload.array('files'), async (req, r
       })
     }
     res.json({ ok: true, files: results })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ ok: false, reason: 'db_error' })
+  }
+})
+
+// --- 标签管理接口 ---
+
+// 获取用户所有标签
+app.get('/api/tags', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ ok: false })
+  try {
+    const [rows] = await pool.query('SELECT * FROM tags WHERE user_id = ? ORDER BY created_at DESC', [req.user.id])
+    res.json({ ok: true, list: rows })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ ok: false, reason: 'db_error' })
+  }
+})
+
+// 创建标签
+app.post('/api/tags', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ ok: false })
+  const { name } = req.body
+  if (!name || !name.trim()) return res.status(400).json({ ok: false, reason: 'missing_name' })
+  
+  try {
+    const [result] = await pool.query('INSERT INTO tags (user_id, name) VALUES (?, ?)', [req.user.id, name.trim()])
+    res.json({ ok: true, id: result.insertId, name: name.trim() })
+  } catch (error) {
+    if (error.errno === 1062) {
+      return res.status(409).json({ ok: false, reason: 'tag_exists' })
+    }
+    console.error(error)
+    res.status(500).json({ ok: false, reason: 'db_error' })
+  }
+})
+
+// 删除标签
+app.delete('/api/tags/:id', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ ok: false })
+  try {
+    await pool.query('DELETE FROM tags WHERE id = ? AND user_id = ?', [req.params.id, req.user.id])
+    res.json({ ok: true })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ ok: false, reason: 'db_error' })
+  }
+})
+
+// 更新标签
+app.put('/api/tags/:id', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ ok: false })
+  const { name } = req.body
+  if (!name || !name.trim()) return res.status(400).json({ ok: false, reason: 'missing_name' })
+  
+  try {
+    await pool.query('UPDATE tags SET name = ? WHERE id = ? AND user_id = ?', [name.trim(), req.params.id, req.user.id])
+    res.json({ ok: true })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ ok: false, reason: 'db_error' })
+  }
+})
+
+// 获取内容的标签
+app.get('/api/tags/content', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ ok: false })
+  const { type, id } = req.query
+  try {
+    const [rows] = await pool.query(`
+      SELECT t.* 
+      FROM tags t
+      JOIN content_tags ct ON t.id = ct.tag_id
+      WHERE ct.content_type = ? AND ct.content_id = ?
+    `, [type, id])
+    res.json({ ok: true, list: rows })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ ok: false, reason: 'db_error' })
+  }
+})
+
+// 批量添加标签到内容
+app.post('/api/tags/content', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ ok: false })
+  const { type, id, tagIds } = req.body // id can be single ID or array of IDs
+  
+  if (!type || !id || !Array.isArray(tagIds)) {
+    return res.status(400).json({ ok: false, reason: 'invalid_params' })
+  }
+  
+  const contentIds = Array.isArray(id) ? id : [id]
+  if (contentIds.length === 0 || tagIds.length === 0) {
+    return res.json({ ok: true })
+  }
+
+  try {
+    // 简单的批量插入，忽略重复
+    const values = []
+    for (const contentId of contentIds) {
+      for (const tagId of tagIds) {
+        values.push([type, contentId, tagId])
+      }
+    }
+    
+    await pool.query(`
+      INSERT IGNORE INTO content_tags (content_type, content_id, tag_id) VALUES ?
+    `, [values])
+    
+    res.json({ ok: true })
   } catch (error) {
     console.error(error)
     res.status(500).json({ ok: false, reason: 'db_error' })
