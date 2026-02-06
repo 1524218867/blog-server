@@ -128,6 +128,24 @@ const ensureSchema = async () => {
     }
   }
 
+  // 尝试添加 enable_history_recording 列
+  try {
+    await pool.query('ALTER TABLE users ADD COLUMN enable_history_recording BOOLEAN DEFAULT TRUE')
+  } catch (e) {
+    if (e.errno !== 1060) {
+      console.warn('Warning: Failed to add enable_history_recording column:', e.message)
+    }
+  }
+
+  // 尝试添加 enable_auto_continue 列
+  try {
+    await pool.query('ALTER TABLE users ADD COLUMN enable_auto_continue BOOLEAN DEFAULT TRUE')
+  } catch (e) {
+    if (e.errno !== 1060) {
+      console.warn('Warning: Failed to add enable_auto_continue column:', e.message)
+    }
+  }
+
   // --- 新增：内容访问/使用记录表 ---
   await pool.query(`
     CREATE TABLE IF NOT EXISTS content_history (
@@ -430,9 +448,13 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
     return
   }
   try {
-    const [rows] = await pool.query('SELECT id, email, role, avatar FROM users WHERE id = ?', [req.user.id])
+    const [rows] = await pool.query('SELECT id, email, role, avatar, enable_history_recording, enable_auto_continue FROM users WHERE id = ?', [req.user.id])
     if (rows.length > 0) {
-      res.json({ ok: true, user: rows[0] })
+      // 转换 boolean (MySQL BOOLEAN is TINYINT)
+      const user = rows[0]
+      user.enable_history_recording = !!user.enable_history_recording
+      user.enable_auto_continue = !!user.enable_auto_continue
+      res.json({ ok: true, user })
     } else {
       res.status(404).json({ ok: false, reason: 'user_not_found' })
     }
@@ -444,16 +466,27 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
 
 app.put('/api/auth/profile', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
-  const { avatar } = req.body
+  const { avatar, enable_history_recording, enable_auto_continue } = req.body
   
   try {
     if (avatar !== undefined) {
       await pool.query('UPDATE users SET avatar = ? WHERE id = ?', [avatar, req.user.id])
     }
     
+    if (enable_history_recording !== undefined) {
+      await pool.query('UPDATE users SET enable_history_recording = ? WHERE id = ?', [enable_history_recording ? 1 : 0, req.user.id])
+    }
+
+    if (enable_auto_continue !== undefined) {
+      await pool.query('UPDATE users SET enable_auto_continue = ? WHERE id = ?', [enable_auto_continue ? 1 : 0, req.user.id])
+    }
+    
     // 返回更新后的用户信息
-    const [rows] = await pool.query('SELECT id, email, role, avatar FROM users WHERE id = ?', [req.user.id])
-    res.json({ ok: true, user: rows[0] })
+    const [rows] = await pool.query('SELECT id, email, role, avatar, enable_history_recording, enable_auto_continue FROM users WHERE id = ?', [req.user.id])
+    const user = rows[0]
+    user.enable_history_recording = !!user.enable_history_recording
+    user.enable_auto_continue = !!user.enable_auto_continue
+    res.json({ ok: true, user })
   } catch (error) {
     console.error(error)
     res.status(500).json({ ok: false, reason: 'db_error' })
@@ -1506,6 +1539,13 @@ app.post('/api/content/history', requireAuth, async (req, res) => {
   if (!type || !id) return res.status(400).json({ ok: false, reason: 'missing_params' })
 
   try {
+    // 检查用户是否开启了历史记录
+    const [userRows] = await pool.query('SELECT enable_history_recording FROM users WHERE id = ?', [req.user.id])
+    if (userRows.length > 0 && userRows[0].enable_history_recording === 0) {
+      // 用户关闭了历史记录，直接返回成功但不记录
+      return res.json({ ok: true, skipped: true })
+    }
+
     // 使用 ON DUPLICATE KEY UPDATE
     await pool.query(`
       INSERT INTO content_history (user_id, content_type, content_id, last_access_time, progress, is_finished, created_at)
