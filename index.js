@@ -215,6 +215,23 @@ const ensureSchema = async () => {
   `)
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS article_groups (
+      id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+      name VARCHAR(50) NOT NULL,
+      user_id INT UNSIGNED,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `)
+
+  // 尝试添加 group_id 列到 articles
+  try {
+    await pool.query('ALTER TABLE articles ADD COLUMN group_id INT UNSIGNED')
+    await pool.query('ALTER TABLE articles ADD CONSTRAINT fk_article_group FOREIGN KEY (group_id) REFERENCES article_groups(id) ON DELETE SET NULL')
+  } catch (_e) {
+    // 忽略重复列错误
+  }
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS image_groups (
       id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
       name VARCHAR(50) NOT NULL,
@@ -644,6 +661,52 @@ app.post('/api/upload/image', requireAuth, upload.single('file'), singleUploadHa
 
 // --- 文章管理 ---
 
+// 获取文章分组
+app.get('/api/article-groups', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ ok: false })
+  try {
+    const [rows] = await pool.query(`
+      SELECT g.*, COUNT(a.id) as article_count 
+      FROM article_groups g 
+      LEFT JOIN articles a ON g.id = a.group_id 
+      WHERE g.user_id = ?
+      GROUP BY g.id 
+      ORDER BY g.created_at ASC
+    `, [req.user.id])
+    res.json({ ok: true, list: rows })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ ok: false, reason: 'db_error' })
+  }
+})
+
+// 创建文章分组
+app.post('/api/article-groups', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ ok: false })
+  const { name } = req.body
+  if (!name) return res.status(400).json({ ok: false, reason: 'missing_name' })
+  try {
+    const [result] = await pool.query('INSERT INTO article_groups (name, user_id) VALUES (?, ?)', [name, req.user.id])
+    res.json({ ok: true, id: result.insertId, name })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ ok: false, reason: 'db_error' })
+  }
+})
+
+// 删除文章分组
+app.delete('/api/article-groups/:id', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ ok: false })
+  const { id } = req.params
+  try {
+    await pool.query('DELETE FROM article_groups WHERE id = ? AND user_id = ?', [id, req.user.id])
+    res.json({ ok: true })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ ok: false, reason: 'db_error' })
+  }
+})
+
 // 获取列表
 app.get('/api/articles', requireAuth, async (req, res) => {
   if (!pool) {
@@ -651,13 +714,33 @@ app.get('/api/articles', requireAuth, async (req, res) => {
     return
   }
   try {
-    const { q } = req.query
+    const { q, tag_id, group_id } = req.query
     let sql = `
-      SELECT a.*, CASE WHEN cp.id IS NOT NULL THEN 1 ELSE 0 END as isPinned 
+      SELECT DISTINCT a.*, CASE WHEN cp.id IS NOT NULL THEN 1 ELSE 0 END as isPinned 
       FROM articles a 
-      LEFT JOIN content_pins cp ON a.id = cp.content_id AND cp.content_type = 'article' AND cp.user_id = a.author_id 
-      WHERE a.author_id = ?`
+      LEFT JOIN content_pins cp ON a.id = cp.content_id AND cp.content_type = 'article' AND cp.user_id = a.author_id`
+
+    // Join if tag filtering is needed
+    if (tag_id !== undefined && tag_id !== '') {
+      sql += ' JOIN content_tags ct ON a.id = ct.content_id'
+    }
+
+    sql += ' WHERE a.author_id = ?'
     const params = [req.user.id]
+
+    if (tag_id !== undefined && tag_id !== '') {
+      sql += " AND ct.content_type = 'article' AND ct.tag_id = ?"
+      params.push(tag_id)
+    }
+
+    if (group_id !== undefined && group_id !== '') {
+      if (group_id === 'null' || group_id === '0') {
+        sql += ' AND a.group_id IS NULL'
+      } else {
+        sql += ' AND a.group_id = ?'
+        params.push(group_id)
+      }
+    }
     
     if (q) {
       sql += ' AND (a.title LIKE ? OR a.content LIKE ?)'
@@ -716,11 +799,11 @@ app.get('/api/articles/:id', requireAuth, async (req, res) => {
 // 创建文章
 app.post('/api/articles', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
-  const { title, content, tag, status, date, cover } = req.body
+  const { title, content, tag, status, date, cover, group_id } = req.body
   try {
     const [result] = await pool.query(
-      'INSERT INTO articles (title, content, tag, status, publish_date, cover, author_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())',
-      [title, content, tag, status, date, cover, req.user.id]
+      'INSERT INTO articles (title, content, tag, status, publish_date, cover, author_id, group_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())',
+      [title, content, tag, status, date, cover, req.user.id, group_id]
     )
     res.json({ ok: true, id: result.insertId })
   } catch (error) {
@@ -733,11 +816,29 @@ app.post('/api/articles', requireAuth, async (req, res) => {
 app.put('/api/articles/:id', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
   const { id } = req.params
-  const { title, content, tag, status, date, cover } = req.body
+  const { title, content, tag, status, date, cover, group_id } = req.body
+  
+  // Build dynamic update query
+  const fields = []
+  const params = []
+  
+  if (title !== undefined) { fields.push('title=?'); params.push(title) }
+  if (content !== undefined) { fields.push('content=?'); params.push(content) }
+  if (tag !== undefined) { fields.push('tag=?'); params.push(tag) }
+  if (status !== undefined) { fields.push('status=?'); params.push(status) }
+  if (date !== undefined) { fields.push('publish_date=?'); params.push(date) }
+  if (cover !== undefined) { fields.push('cover=?'); params.push(cover) }
+  if (group_id !== undefined) { fields.push('group_id=?'); params.push(group_id === 'null' ? null : group_id) }
+  
+  if (fields.length === 0) return res.json({ ok: true })
+  
+  params.push(id)
+  params.push(req.user.id)
+  
   try {
     await pool.query(
-      'UPDATE articles SET title=?, content=?, tag=?, status=?, publish_date=?, cover=? WHERE id=? AND author_id=?',
-      [title, content, tag, status, date, cover, id, req.user.id]
+      `UPDATE articles SET ${fields.join(', ')} WHERE id=? AND author_id=?`,
+      params
     )
     res.json({ ok: true })
   } catch (error) {
@@ -773,7 +874,7 @@ app.get('/api/image-groups', requireAuth, async (req, res) => {
       GROUP BY g.id 
       ORDER BY g.created_at ASC
     `, [req.user.id])
-    res.json(rows)
+    res.json({ ok: true, list: rows })
   } catch (error) {
     console.error(error)
     res.status(500).json({ ok: false, reason: 'db_error' })
@@ -811,14 +912,23 @@ app.delete('/api/image-groups/:id', requireAuth, async (req, res) => {
 // 获取图片列表
 app.get('/api/images', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
-  const { group_id, q } = req.query
+  const { group_id, q, tag_id } = req.query
   try {
     let sql = `
-      SELECT i.*, CASE WHEN cp.id IS NOT NULL THEN 1 ELSE 0 END as isPinned 
+      SELECT DISTINCT i.*, CASE WHEN cp.id IS NOT NULL THEN 1 ELSE 0 END as isPinned 
       FROM images i 
       LEFT JOIN content_pins cp ON i.id = cp.content_id AND cp.content_type = 'image' AND cp.user_id = i.user_id`
+
     const params = [req.user.id]
     const conditions = ['i.user_id = ?']
+
+    // Join if tag filtering is needed
+    if (tag_id !== undefined && tag_id !== '') {
+      sql += ' JOIN content_tags ct ON i.id = ct.content_id'
+      conditions.push("ct.content_type = 'image'")
+      conditions.push('ct.tag_id = ?')
+      params.push(tag_id)
+    }
 
     if (group_id !== undefined && group_id !== '') {
       if (group_id === 'null' || group_id === '0') {
@@ -868,6 +978,26 @@ app.delete('/api/images/:id', requireAuth, async (req, res) => {
       }
     }
     await pool.query('DELETE FROM images WHERE id = ? AND user_id = ?', [id, req.user.id])
+    res.json({ ok: true })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ ok: false, reason: 'db_error' })
+  }
+})
+
+// 更新图片信息（如移动分组）
+app.put('/api/images/:id', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ ok: false })
+  const { id } = req.params
+  const { group_id } = req.body
+  
+  if (group_id === undefined) return res.json({ ok: true }) // Nothing to update
+  
+  try {
+    await pool.query(
+      'UPDATE images SET group_id = ? WHERE id = ? AND user_id = ?',
+      [group_id === 'null' ? null : group_id, id, req.user.id]
+    )
     res.json({ ok: true })
   } catch (error) {
     console.error(error)
@@ -929,7 +1059,7 @@ app.get('/api/video-groups', requireAuth, async (req, res) => {
       GROUP BY g.id 
       ORDER BY g.created_at ASC
     `, [req.user.id])
-    res.json(rows)
+    res.json({ ok: true, list: rows })
   } catch (error) {
     console.error(error)
     res.status(500).json({ ok: false, reason: 'db_error' })
@@ -966,14 +1096,23 @@ app.delete('/api/video-groups/:id', requireAuth, async (req, res) => {
 // 获取视频列表
 app.get('/api/videos', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
-  const { group_id, q } = req.query
+  const { group_id, q, tag_id } = req.query
   try {
     let sql = `
-      SELECT v.*, CASE WHEN cp.id IS NOT NULL THEN 1 ELSE 0 END as isPinned 
+      SELECT DISTINCT v.*, CASE WHEN cp.id IS NOT NULL THEN 1 ELSE 0 END as isPinned 
       FROM videos v 
       LEFT JOIN content_pins cp ON v.id = cp.content_id AND cp.content_type = 'video' AND cp.user_id = v.user_id`
+
     const params = [req.user.id]
     const conditions = ['v.user_id = ?']
+
+    // Join if tag filtering is needed
+    if (tag_id !== undefined && tag_id !== '') {
+      sql += ' JOIN content_tags ct ON v.id = ct.content_id'
+      conditions.push("ct.content_type = 'video'")
+      conditions.push('ct.tag_id = ?')
+      params.push(tag_id)
+    }
 
     if (group_id !== undefined && group_id !== '') {
       if (group_id === 'null' || group_id === '0') {
@@ -1028,6 +1167,26 @@ app.delete('/api/videos/:id', requireAuth, async (req, res) => {
   }
 })
 
+// 更新视频信息（如移动分组）
+app.put('/api/videos/:id', requireAuth, async (req, res) => {
+  if (!pool) return res.status(503).json({ ok: false })
+  const { id } = req.params
+  const { group_id } = req.body
+  
+  if (group_id === undefined) return res.json({ ok: true }) // Nothing to update
+  
+  try {
+    await pool.query(
+      'UPDATE videos SET group_id = ? WHERE id = ? AND user_id = ?',
+      [group_id === 'null' ? null : group_id, id, req.user.id]
+    )
+    res.json({ ok: true })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ ok: false, reason: 'db_error' })
+  }
+})
+
 // 视频上传接口
 app.post('/api/upload/videos', requireAuth, upload.array('files'), async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
@@ -1073,8 +1232,19 @@ app.post('/api/upload/videos', requireAuth, upload.array('files'), async (req, r
 // 获取用户所有标签
 app.get('/api/tags', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
+  const { type } = req.query
   try {
-    const [rows] = await pool.query('SELECT * FROM tags WHERE user_id = ? ORDER BY created_at DESC', [req.user.id])
+    let sql = 'SELECT * FROM tags WHERE user_id = ?'
+    const params = [req.user.id]
+    
+    if (type) {
+      sql += ' AND type = ?'
+      params.push(type)
+    }
+    
+    sql += ' ORDER BY created_at DESC'
+    
+    const [rows] = await pool.query(sql, params)
     res.json({ ok: true, list: rows })
   } catch (error) {
     console.error(error)
@@ -1085,12 +1255,15 @@ app.get('/api/tags', requireAuth, async (req, res) => {
 // 创建标签
 app.post('/api/tags', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
-  const { name } = req.body
+  const { name, type = 'general' } = req.body
   if (!name || !name.trim()) return res.status(400).json({ ok: false, reason: 'missing_name' })
   
   try {
-    const [result] = await pool.query('INSERT INTO tags (user_id, name) VALUES (?, ?)', [req.user.id, name.trim()])
-    res.json({ ok: true, id: result.insertId, name: name.trim() })
+    const [result] = await pool.query(
+      'INSERT INTO tags (user_id, name, type) VALUES (?, ?, ?)', 
+      [req.user.id, name.trim(), type]
+    )
+    res.json({ ok: true, id: result.insertId, name: name.trim(), type })
   } catch (error) {
     if (error.errno === 1062) {
       return res.status(409).json({ ok: false, reason: 'tag_exists' })
@@ -1148,18 +1321,27 @@ app.get('/api/tags/content', requireAuth, async (req, res) => {
 // 批量添加标签到内容
 app.post('/api/tags/content', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
-  const { type, id, tagIds } = req.body // id can be single ID or array of IDs
+  const { type, id, tagIds, mode } = req.body // id can be single ID or array of IDs
   
   if (!type || !id || !Array.isArray(tagIds)) {
     return res.status(400).json({ ok: false, reason: 'invalid_params' })
   }
   
   const contentIds = Array.isArray(id) ? id : [id]
-  if (contentIds.length === 0 || tagIds.length === 0) {
+  if (contentIds.length === 0) {
     return res.json({ ok: true })
   }
 
   try {
+    // If mode is 'replace', remove existing tags for these contents first
+    if (mode === 'replace') {
+      await pool.query(`DELETE FROM content_tags WHERE content_type = ? AND content_id IN (?)`, [type, contentIds])
+    }
+
+    if (tagIds.length === 0) {
+      return res.json({ ok: true })
+    }
+
     // 简单的批量插入，忽略重复
     const values = []
     for (const contentId of contentIds) {
@@ -1199,7 +1381,7 @@ app.get('/api/audio-groups', requireAuth, async (req, res) => {
       audioCount: row.audio_count
     }))
     
-    res.json(result)
+    res.json({ ok: true, list: result })
   } catch (error) {
     console.error(error)
     res.status(500).json({ ok: false, reason: 'db_error' })
@@ -1270,23 +1452,31 @@ app.delete('/api/audio-groups/:id', requireAuth, async (req, res) => {
 // 获取音乐列表
 app.get('/api/audios', requireAuth, async (req, res) => {
   if (!pool) return res.status(503).json({ ok: false })
-  const { group_id, q } = req.query
+  const { group_id, q, tag_id } = req.query
   try {
-    let sql = 'SELECT * FROM audios'
+    let sql = 'SELECT DISTINCT a.* FROM audios a'
     const params = [req.user.id]
-    const conditions = ['user_id = ?']
+    const conditions = ['a.user_id = ?']
+
+    // Join if tag filtering is needed
+    if (tag_id !== undefined && tag_id !== '') {
+      sql += ' JOIN content_tags ct ON a.id = ct.content_id'
+      conditions.push("ct.content_type = 'audio'")
+      conditions.push('ct.tag_id = ?')
+      params.push(tag_id)
+    }
 
     if (group_id !== undefined && group_id !== '') {
       if (group_id === 'null' || group_id === '0') {
-        conditions.push('group_id IS NULL')
+        conditions.push('a.group_id IS NULL')
       } else {
-        conditions.push('group_id = ?')
+        conditions.push('a.group_id = ?')
         params.push(group_id)
       }
     }
 
     if (q) {
-      conditions.push('(filename LIKE ? OR singer LIKE ?)')
+      conditions.push('(a.filename LIKE ? OR a.singer LIKE ?)')
       params.push(`%${q}%`, `%${q}%`)
     }
 
@@ -1294,7 +1484,7 @@ app.get('/api/audios', requireAuth, async (req, res) => {
       sql += ' WHERE ' + conditions.join(' AND ')
     }
 
-    sql += ' ORDER BY created_at DESC'
+    sql += ' ORDER BY a.created_at DESC'
     const [rows] = await pool.query(sql, params)
     res.json(rows)
   } catch (error) {
